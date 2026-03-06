@@ -1,11 +1,9 @@
 """
-YsuShtok Bot — Telegram бот для игры «Что? Где? Когда?»
-Источник: gotquestions.online (React SPA — нужен Selenium)
+YsuShtok Bot — Telegram բոտ «Ի՞նչ, Որտե՞ղ, Ե՞րբ» խաղի համար
+Աղբյուր՝ gotquestions.online (React SPA — պետք է Selenium)
 
-Установка:
+Տեղադրում՝
   pip install aiogram requests selenium webdriver-manager beautifulsoup4 deep-translator
-
-Нужен установленный Google Chrome или Chromium.
 """
 
 import asyncio
@@ -68,6 +66,10 @@ _META_MARKERS = re.compile(
     r"|\d{4}-\d{2}"
     r"|блиц|кубок|лига|чемпионат|олимпиад"
     r"|(?:янв|фев|мар|апр|май|июн|июл|авг|сен|окт|ноя|дек)\.\s*\d{4}"
+    r"|вопрос\s+\d+"
+    r"|^\d+[\.\)]\s*[А-ЯA-Z]"
+    r"|(?:первый|второй|третий|финал)\s+чемпионат"
+    r"|пакет\s+\d+"
     r")",
     re.IGNORECASE
 )
@@ -104,7 +106,22 @@ def _strip_meta_prefix(text: str) -> str:
 
 
 def clean_question(raw: str) -> str:
-    text  = raw.strip()
+    text = raw.strip()
+
+    # Կտրել վերնագրային տողերը սկզբից
+    lines = text.splitlines()
+    filtered = []
+    for line in lines:
+        s = line.strip()
+        if not s:
+            continue
+        if len(s) < 120 and "?" not in s and _META_MARKERS.search(s):
+            continue
+        if re.match(r"(?i)^вопрос\s+\d+", s):
+            continue
+        filtered.append(line)
+    text = "\n".join(filtered).strip()
+
     q_pos = text.find("?")
     if q_pos == -1:
         return _strip_meta_prefix(text)
@@ -117,6 +134,8 @@ def clean_question(raw: str) -> str:
     candidate = _strip_meta_prefix(text[start:].strip())
     candidate = re.sub(r'^\d+\.\s*', '', candidate).strip()
     candidate = re.split(r'(?i)\s*ответ\s*:', candidate)[0].strip()
+    candidate = re.split(r'(?i)\s*источник\s*[:\.]?', candidate)[0].strip()
+    candidate = re.split(r'(?i)\s*автор\s*[:\.]?', candidate)[0].strip()
     return candidate if len(candidate) > 15 else text
 
 
@@ -125,6 +144,8 @@ def clean_answer(raw: str) -> str:
     if _META_MARKERS.search(text) or re.search(r"(?i)вопрос\s+\d+|блиц|кубок|лига|тур\s+\d+", text):
         return "—"
     text = re.sub(r"(?i)^ответ[\s:]+", "", text).strip()
+    text = re.split(r'(?i)\s*источник\s*[:\.]?', text)[0].strip()
+    text = re.split(r'(?i)\s*автор\s*[:\.]?', text)[0].strip()
     return text or "—"
 
 
@@ -183,13 +204,12 @@ def fetch_via_nextjs_api(q_id: int) -> dict | None:
         cat     = flat.get("category") or flat.get("category_name") or "Без категории"
         zachot  = flat.get("zachot") or flat.get("accept") or flat.get("accepted") or ""
         comment = flat.get("comment") or flat.get("commentary") or ""
-        source  = flat.get("source") or flat.get("package") or ""
         q = clean_question(q)
         a = clean_answer(a) if a else "—"
         if q and len(q) > 15 and "?" in q:
             return {"id": q_id, "url": f"https://gotquestions.online/question/{q_id}",
                     "question": q, "answer": a, "category": cat,
-                    "source": source, "zachot": zachot, "comment": comment}
+                    "zachot": zachot, "comment": comment}
     except Exception as e:
         print(f"[NEXT] Ошибка: {e}")
     return None
@@ -246,7 +266,6 @@ def fetch_via_selenium(q_id: int) -> dict | None:
 
         time.sleep(2.5)
 
-        # Кликаем "Показать ответ"
         try:
             answer_btns = driver.find_elements(By.XPATH,
                 "//*[not(ancestor::nav) and not(ancestor::header)]"
@@ -314,7 +333,7 @@ def fetch_via_selenium(q_id: int) -> dict | None:
                     if re.match(r"(?i)^ответ\s*:", part):
                         if not a_text:
                             val = re.sub(r"(?i)^ответ\s*:\s*", "", part).strip().rstrip(".")
-                            val = re.split(r"(?i)\s+(?:зачёт|зачет|комментарий|автор)\s*:", val)[0].strip()
+                            val = re.split(r"(?i)\s+(?:зачёт|зачет|комментарий|автор|источник)\s*:", val)[0].strip()
                             if val:
                                 a_text = val
                     elif re.match(r"(?i)^зач[её]т\s*:", part):
@@ -323,10 +342,10 @@ def fetch_via_selenium(q_id: int) -> dict | None:
                     elif re.match(r"(?i)^комментарий\s*:", part):
                         if not comment_text:
                             val = re.sub(r"(?i)^комментарий\s*:\s*", "", part).strip()
-                            val = re.split(r"(?i)\s*источник", val)[0].strip()
+                            val = re.split(r"(?i)\s*(?:источник|автор)", val)[0].strip()
                             comment_text = val
                     elif re.match(r"(?i)^(?:автор|источник)\s*:", part):
-                        pass
+                        pass  # Игнорируем автора и источник
                     else:
                         if len(part) > 15:
                             content_texts.append(part)
@@ -348,7 +367,7 @@ def fetch_via_selenium(q_id: int) -> dict | None:
         if q_text:
             return {"id": q_id, "url": url,
                     "question": q_text, "answer": a_text or "—",
-                    "category": "Без категории", "source": "",
+                    "category": "Без категории",
                     "zachot": zachot_text, "comment": comment_text}
 
     except Exception as e:
@@ -382,14 +401,12 @@ def find_question(diff_min: int, diff_max: int) -> dict | None:
         q_data["difficulty"] = diff
         last_q = q_data
         print(f"[FIND] ID={q_id} сложность={diff}, нужно {diff_min}-{diff_max}")
-        # Пропускаем вопросы с раздаточным материалом
         q_lower = q_data["question"].lower()
         if any(x in q_lower for x in ["раздаточн", "на рисунке", "на фото", "на картинк",
                                         "перед вами", "посмотрите на", "внимание, рисунок",
                                         "см. рисунок", "см. фото"]):
             print(f"[FIND] ⏭ ID={q_id} — раздаточный материал, пропускаем")
             continue
-
         if diff_min <= diff <= diff_max:
             print("[FIND] ✅ Подходит, переводим...")
             q_data["translation"] = translate_to_armenian(q_data["question"])
