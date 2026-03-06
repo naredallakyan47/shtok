@@ -14,13 +14,3 @@ ENV CHROME_BIN=/usr/bin/chromium
 ENV CHROMEDRIVER_PATH=/usr/bin/chromedriver
 
 CMD ["python", "main.py"]
-```
-
-**2. `requirements.txt`** — թարմացրու՝
-```
-aiogram
-requests
-deep-translator
-aiohttp
-selenium
-beautifulsoup4
