@@ -162,13 +162,15 @@ def get_build_id() -> str | None:
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
             "Accept-Language": "ru-RU,ru;q=0.9",
         })
+        print(f"[INIT] status={resp.status_code}, len={len(resp.text)}")
+        print(f"[INIT] preview={resp.text[:500]}")
         for pattern in [r'"buildId"\s*:\s*"([^"]+)"', r'/_next/static/([^/]+)/_buildManifest']:
             m = re.search(pattern, resp.text)
             if m:
                 _BUILD_ID = m.group(1)
                 print(f"[INIT] Build ID: {_BUILD_ID}")
                 return _BUILD_ID
-        print(f"[INIT] Build ID չգտնվեց, status={resp.status_code}, text={resp.text[:200]}")
+        print(f"[INIT] Build ID չգտնվեց")
     except Exception as e:
         print(f"[INIT] Ошибка: {e}")
     return None
