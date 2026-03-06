@@ -157,14 +157,18 @@ def get_build_id() -> str | None:
     if _BUILD_ID:
         return _BUILD_ID
     try:
-        resp = requests.get("https://gotquestions.online/", timeout=8, headers={
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+        resp = requests.get("https://gotquestions.online/", timeout=10, headers={
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Accept-Language": "ru-RU,ru;q=0.9",
         })
         for pattern in [r'"buildId"\s*:\s*"([^"]+)"', r'/_next/static/([^/]+)/_buildManifest']:
             m = re.search(pattern, resp.text)
             if m:
                 _BUILD_ID = m.group(1)
+                print(f"[INIT] Build ID: {_BUILD_ID}")
                 return _BUILD_ID
+        print(f"[INIT] Build ID չգտնվեց, status={resp.status_code}, text={resp.text[:200]}")
     except Exception as e:
         print(f"[INIT] Ошибка: {e}")
     return None
