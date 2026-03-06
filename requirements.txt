@@ -2,3 +2,5 @@ aiogram
 requests
 deep-translator
 aiohttp
+selenium
+beautifulsoup4
