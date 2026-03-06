@@ -503,10 +503,20 @@ async def _send(message: types.Message, diff_min: int, diff_max: int, label: str
     print(f"[BOT] ✅ Отправлен ID={q_data['id']} сложность={diff}")
 
 
+from aiohttp import web
+
+
 async def main():
+    # Keep-alive web server
+    app = web.Application()
+    app.router.add_get("/", lambda r: web.Response(text="ok"))
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, "0.0.0.0", 10000)
+    await site.start()
+
     print("🚀 YsuShtok Bot запущен!")
     await dp.start_polling(bot)
-
 
 if __name__ == "__main__":
     asyncio.run(main())
