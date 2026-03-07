@@ -1,9 +1,6 @@
 """
 YsuShtok Bot — Telegram բոտ «Ի՞նչ, Որտե՞ղ, Ե՞րբ» խաղի համար
-Աղբյուր՝ gotquestions.online (React SPA — պետք է Selenium)
-
-Տեղադրում՝
-  pip install aiogram requests selenium webdriver-manager beautifulsoup4 deep-translator
+Աղբյուր՝ gotquestions.online
 """
 
 import asyncio
@@ -11,6 +8,7 @@ import random
 import re
 import time
 import requests
+from aiohttp import web
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
 
@@ -20,14 +18,19 @@ MAX_ATTEMPTS = 8
 bot = Bot(token=TG_TOKEN)
 dp  = Dispatcher()
 
+HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Language": "ru-RU,ru;q=0.9",
+    "Referer": "https://gotquestions.online/",
+}
+
 
 def translate_to_armenian(text: str) -> str:
     try:
         from deep_translator import GoogleTranslator
         result = GoogleTranslator(source="ru", target="hy").translate(text)
         return result or "—"
-    except ImportError:
-        return "⚠️ Установи: pip install deep-translator"
     except Exception as e:
         print(f"[TRANSLATE] Ошибка: {e}")
         return "—"
@@ -67,7 +70,6 @@ _META_MARKERS = re.compile(
     r"|блиц|кубок|лига|чемпионат|олимпиад"
     r"|(?:янв|фев|мар|апр|май|июн|июл|авг|сен|окт|ноя|дек)\.\s*\d{4}"
     r"|вопрос\s+\d+"
-    r"|^\d+[\.\)]\s*[А-ЯA-Z]"
     r"|(?:первый|второй|третий|финал)\s+чемпионат"
     r"|пакет\s+\d+"
     r")",
@@ -94,12 +96,10 @@ def _strip_meta_prefix(text: str) -> str:
         result = " ".join(result_lines).strip()
         if result and len(result) > 10:
             return result
-
     best_end = max((m.end() for m in _META_MARKERS.finditer(text)), default=0)
     if best_end > 0:
         rest = text[best_end:]
         rest = re.sub(r"^[\s·•–—\d]+", "", rest)
-        rest = re.sub(r"^[А-ЯA-Z][а-яёa-z]+-?[а-яёa-z]*\s+[А-ЯA-Z][а-яёa-z]+\s+", "", rest)
         if len(rest) > 15:
             return rest.strip()
     return text
@@ -107,8 +107,6 @@ def _strip_meta_prefix(text: str) -> str:
 
 def clean_question(raw: str) -> str:
     text = raw.strip()
-
-    # Կտրել վերնագրային տողերը սկզբից
     lines = text.splitlines()
     filtered = []
     for line in lines:
@@ -149,78 +147,6 @@ def clean_answer(raw: str) -> str:
     return text or "—"
 
 
-_BUILD_ID: str | None = None
-
-
-def get_build_id() -> str | None:
-    global _BUILD_ID
-    if _BUILD_ID:
-        return _BUILD_ID
-    try:
-        resp = requests.get("https://gotquestions.online/", timeout=10, headers={
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-            "Accept-Language": "ru-RU,ru;q=0.9",
-        })
-        print(f"[INIT] status={resp.status_code}, len={len(resp.text)}")
-        print(f"[INIT] preview={resp.text[:500]}")
-        for pattern in [r'"buildId"\s*:\s*"([^"]+)"', r'/_next/static/([^/]+)/_buildManifest']:
-            m = re.search(pattern, resp.text)
-            if m:
-                _BUILD_ID = m.group(1)
-                print(f"[INIT] Build ID: {_BUILD_ID}")
-                return _BUILD_ID
-        print(f"[INIT] Build ID չգտնվեց")
-    except Exception as e:
-        print(f"[INIT] Ошибка: {e}")
-    return None
-
-
-def _flatten(d, result=None):
-    if result is None:
-        result = {}
-    if isinstance(d, dict):
-        for k, v in d.items():
-            if isinstance(v, (dict, list)):
-                _flatten(v, result)
-            elif v and isinstance(v, str) and len(v) > 1:
-                result[k.lower()] = v
-    elif isinstance(d, list):
-        for item in d:
-            _flatten(item, result)
-    return result
-
-
-def fetch_via_nextjs_api(q_id: int) -> dict | None:
-    build_id = get_build_id()
-    if not build_id:
-        return None
-    url = f"https://gotquestions.online/_next/data/{build_id}/question/{q_id}.json"
-    try:
-        resp = requests.get(url, timeout=8, headers={
-            "User-Agent": "Mozilla/5.0", "x-nextjs-data": "1",
-            "Referer": f"https://gotquestions.online/question/{q_id}",
-        })
-        if resp.status_code != 200:
-            return None
-        flat    = _flatten(resp.json())
-        q       = flat.get("question") or flat.get("text") or flat.get("body") or ""
-        a       = (flat.get("answer") or flat.get("answer_text") or
-                   flat.get("correct_answer") or flat.get("correct") or "")
-        cat     = flat.get("category") or flat.get("category_name") or "Без категории"
-        zachot  = flat.get("zachot") or flat.get("accept") or flat.get("accepted") or ""
-        comment = flat.get("comment") or flat.get("commentary") or ""
-        q = clean_question(q)
-        a = clean_answer(a) if a else "—"
-        if q and len(q) > 15 and "?" in q:
-            return {"id": q_id, "url": f"https://gotquestions.online/question/{q_id}",
-                    "question": q, "answer": a, "category": cat,
-                    "zachot": zachot, "comment": comment}
-    except Exception as e:
-        print(f"[NEXT] Ошибка: {e}")
-    return None
-
-
 def fetch_via_selenium(q_id: int) -> dict | None:
     try:
         from selenium import webdriver
@@ -229,7 +155,6 @@ def fetch_via_selenium(q_id: int) -> dict | None:
         from selenium.webdriver.common.by import By
         from selenium.webdriver.support.ui import WebDriverWait
         from selenium.webdriver.support import expected_conditions as EC
-        from webdriver_manager.chrome import ChromeDriverManager
         from bs4 import BeautifulSoup
     except ImportError as e:
         print(f"[SELENIUM] Не установлено: {e}")
@@ -252,11 +177,16 @@ def fetch_via_selenium(q_id: int) -> dict | None:
     opts.add_argument("--no-sandbox")
     opts.add_argument("--disable-dev-shm-usage")
     opts.add_argument("--disable-gpu")
+    opts.add_argument("--no-zygote")
+    opts.add_argument("--single-process")
+    opts.add_argument("--disable-extensions")
+    opts.add_argument("--disable-software-rasterizer")
     opts.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+    opts.binary_location = "/usr/bin/chromium"
 
     driver = None
     try:
-        service = Service(ChromeDriverManager().install())
+        service = Service("/usr/bin/chromedriver")
         driver  = webdriver.Chrome(service=service, options=opts)
         driver.get(url)
 
@@ -284,7 +214,6 @@ def fetch_via_selenium(q_id: int) -> dict | None:
             )
             if answer_btns:
                 driver.execute_script("arguments[0].click();", answer_btns[0])
-                print(f"[SELENIUM] Нажата кнопка ответа: {answer_btns[0].text[:40]!r}")
                 time.sleep(1.5)
             else:
                 height = driver.execute_script("return document.body.scrollHeight")
@@ -322,8 +251,6 @@ def fetch_via_selenium(q_id: int) -> dict | None:
             texts.append(t)
 
         print(f"[SELENIUM] ID={q_id}, блоков: {len(texts)}")
-        for i, t in enumerate(texts[:20]):
-            print(f"  [{i}] {t[:120]}")
 
         q_text = a_text = zachot_text = comment_text = ""
         LABEL_RE = re.compile(r"(?i)(?:^|\s)(ответ|зачёт|зачет|комментарий|автор|источник)\s*:")
@@ -351,7 +278,7 @@ def fetch_via_selenium(q_id: int) -> dict | None:
                             val = re.split(r"(?i)\s*(?:источник|автор)", val)[0].strip()
                             comment_text = val
                     elif re.match(r"(?i)^(?:автор|источник)\s*:", part):
-                        pass  # Игнорируем автора и источник
+                        pass
                     else:
                         if len(part) > 15:
                             content_texts.append(part)
@@ -380,19 +307,10 @@ def fetch_via_selenium(q_id: int) -> dict | None:
         print(f"[SELENIUM] Ошибка: {e}")
     finally:
         if driver:
-            driver.quit()
-    return None
-
-
-def get_question(q_id: int) -> dict | None:
-    data = fetch_via_nextjs_api(q_id)
-    if data:
-        print(f"[GET] ✅ Next.js API → ID={q_id}")
-        return data
-    data = fetch_via_selenium(q_id)
-    if data:
-        print(f"[GET] ✅ Selenium → ID={q_id}")
-        return data
+            try:
+                driver.quit()
+            except Exception:
+                pass
     return None
 
 
@@ -400,7 +318,7 @@ def find_question(diff_min: int, diff_max: int) -> dict | None:
     ids    = [random.randint(1, 50000) for _ in range(MAX_ATTEMPTS)]
     last_q = None
     for q_id in ids:
-        q_data = get_question(q_id)
+        q_data = fetch_via_selenium(q_id)
         if not q_data:
             continue
         diff = estimate_difficulty(q_data["question"], q_data["answer"])
@@ -474,10 +392,7 @@ async def _send(message: types.Message, diff_min: int, diff_max: int, label: str
 
     if not q_data:
         await message.answer(
-            "❌ Не удалось получить вопрос.\n\n"
-            "Убедись что установлены:\n"
-            "<code>pip install selenium webdriver-manager deep-translator</code>\n"
-            "И установлен Google Chrome.",
+            "❌ Не удалось получить вопрос. Попробуй ещё раз.",
             parse_mode="HTML"
         )
         return
@@ -509,11 +424,7 @@ async def _send(message: types.Message, diff_min: int, diff_max: int, label: str
     print(f"[BOT] ✅ Отправлен ID={q_data['id']} сложность={diff}")
 
 
-from aiohttp import web
-
-
 async def main():
-    # Keep-alive web server
     app = web.Application()
     app.router.add_get("/", lambda r: web.Response(text="ok"))
     runner = web.AppRunner(app)
@@ -523,6 +434,7 @@ async def main():
 
     print("🚀 YsuShtok Bot запущен!")
     await dp.start_polling(bot)
+
 
 if __name__ == "__main__":
     asyncio.run(main())
