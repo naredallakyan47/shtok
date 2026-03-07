@@ -26,11 +26,25 @@ HEADERS = {
 }
 
 
+RU_TO_HY_TRANSLITERATION = {
+    "икс": "իքս",
+    "альфа": "ալֆա",
+}
+
+def preprocess_for_translation(text: str) -> str:
+    for ru, hy in RU_TO_HY_TRANSLITERATION.items():
+        text = re.sub(r'(?i)\b' + ru + r'\b', hy, text)
+    return text
+
+
 def translate_to_armenian(text: str) -> str:
     try:
+        text = preprocess_for_translation(text)
         from deep_translator import GoogleTranslator
         result = GoogleTranslator(source="ru", target="hy").translate(text)
         return result or "—"
+    except ImportError:
+        return "⚠️ Установи: pip install deep-translator"
     except Exception as e:
         print(f"[TRANSLATE] Ошибка: {e}")
         return "—"
@@ -117,26 +131,19 @@ def clean_question(raw: str) -> str:
             continue
         if re.match(r"(?i)^вопрос\s+\d+", s):
             continue
-        # URL-ով տողերը հանել
         if re.search(r'https?://|www\.', s):
             continue
         filtered.append(line)
     text = "\n".join(filtered).strip()
-    q_pos = text.find("?")
-    if q_pos == -1:
-        return _strip_meta_prefix(text)
-    before = text[:q_pos]
-    start  = 0
-    for sep in ["\n", ". ", ".\t"]:
-        pos = before.rfind(sep)
-        if pos != -1 and pos + len(sep) > start:
-            start = pos + len(sep)
-    candidate = _strip_meta_prefix(text[start:].strip())
-    candidate = re.sub(r'^\d+\.\s*', '', candidate).strip()
-    candidate = re.split(r'(?i)\s*ответ\s*:', candidate)[0].strip()
-    candidate = re.split(r'(?i)\s*источник\s*[:\.]?', candidate)[0].strip()
-    candidate = re.split(r'(?i)\s*автор\s*[:\.]?', candidate)[0].strip()
-    return candidate if len(candidate) > 15 else text
+    text = re.split(r'(?i)\s*ответ\s*:', text)[0].strip()
+    text = re.split(r'(?i)\s*источник\s*[:\.]?', text)[0].strip()
+    text = re.split(r'(?i)\s*автор\s*[:\.]?', text)[0].strip()
+
+    text = _strip_meta_prefix(text)
+
+    text = re.sub(r'^\d+\.\s*', '', text).strip()
+
+    return text if len(text) > 15 else raw.strip()
 
 
 def clean_answer(raw: str) -> str:
