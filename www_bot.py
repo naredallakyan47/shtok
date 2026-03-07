@@ -1,9 +1,11 @@
 """
 YsuShtok Bot — Telegram բոտ «Ի՞նչ, Որտե՞ղ, Ե՞րբ» խաղի համար
 Աղբյուր՝ gotquestions.online
+Gemini AI ֆիլտրացում + թարգմանություն
 """
 
 import asyncio
+import os
 import random
 import re
 import time
@@ -12,8 +14,9 @@ from aiohttp import web
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
 
-TG_TOKEN     = "8294427825:AAEc1aZdUNoqlRgZj01DtAT0ryBtvMvhKlQ"
-MAX_ATTEMPTS = 8
+TG_TOKEN   = os.environ.get("TG_TOKEN", "8294427825:AAEc1aZdUNoqlRgZj01DtAT0ryBtvMvhKlQ")
+GEMINI_KEY = os.environ.get("GEMINI_API_KEY", "AIzaSyBzyT1b_r7NyC5ys8wzifJv2uW_5XvPwZ0")
+MAX_ATTEMPTS = 10
 
 bot = Bot(token=TG_TOKEN)
 dp  = Dispatcher()
@@ -26,29 +29,61 @@ HEADERS = {
 }
 
 
-RU_TO_HY_TRANSLITERATION = {
-    "икс": "իքս",
-    "альфа": "ալֆա",
-}
+# ─── Gemini AI ────────────────────────────────────────────────────────────────
 
-def preprocess_for_translation(text: str) -> str:
-    for ru, hy in RU_TO_HY_TRANSLITERATION.items():
-        text = re.sub(r'(?i)\b' + ru + r'\b', hy, text)
-    return text
+def gemini_analyze(question: str, answer: str) -> dict | None:
+    prompt = f"""Ты помощник для игры «Что? Где? Когда?». Проанализируй вопрос и ответь ТОЛЬКО в формате JSON.
 
+Вопрос: {question}
+Ответ: {answer}
+
+Критерии отклонения (если хотя бы один выполнен — ok: false):
+1. Вопрос требует знания специфически русских реалий (русские поговорки, игра слов на русском, русские имена как ключ к ответу) — при переводе на армянский теряет смысл
+2. Вопрос требует конкретных знаний (даты, имена, факты) а не логики и рассуждения
+
+Если оба критерия НЕ выполнены — ok: true.
+
+Верни ТОЛЬКО JSON без markdown:
+{{"ok": true/false, "reason": "краткая причина если false, иначе пусто", "translation": "перевод вопроса на армянский язык", "answer_hy": "перевод ответа на армянский язык"}}"""
+
+    try:
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_KEY}"
+        resp = requests.post(url, json={
+            "contents": [{"parts": [{"text": prompt}]}],
+            "generationConfig": {"temperature": 0.1, "maxOutputTokens": 500}
+        }, timeout=15)
+
+        if resp.status_code != 200:
+            print(f"[GEMINI] Error {resp.status_code}: {resp.text[:200]}")
+            return None
+
+        data = resp.json()
+        text = data["candidates"][0]["content"]["parts"][0]["text"].strip()
+        text = re.sub(r'^```json\s*|^```\s*|\s*```$', '', text, flags=re.MULTILINE).strip()
+
+        import json
+        result = json.loads(text)
+        print(f"[GEMINI] ok={result.get('ok')}, reason={result.get('reason','')[:60]}")
+        return result
+
+    except Exception as e:
+        print(f"[GEMINI] Ошибка: {e}")
+        return None
+
+
+# ─── Fallback թարգմանություն ──────────────────────────────────────────────────
 
 def translate_to_armenian(text: str) -> str:
     try:
-        text = preprocess_for_translation(text)
         from deep_translator import GoogleTranslator
         result = GoogleTranslator(source="ru", target="hy").translate(text)
         return result or "—"
-    except ImportError:
-        return "⚠️ Установи: pip install deep-translator"
     except Exception as e:
         print(f"[TRANSLATE] Ошибка: {e}")
         return "—"
 
+
+# ─── Բարդության գնահատում ─────────────────────────────────────────────────────
 
 def estimate_difficulty(question: str, answer: str) -> int:
     q_len   = len(question)
@@ -75,6 +110,8 @@ def estimate_difficulty(question: str, answer: str) -> int:
     elif n_words < 15: score -= 1
     return max(1, min(10, score))
 
+
+# ─── Regex մաքրում ────────────────────────────────────────────────────────────
 
 _META_MARKERS = re.compile(
     r"(?:"
@@ -138,11 +175,8 @@ def clean_question(raw: str) -> str:
     text = re.split(r'(?i)\s*ответ\s*:', text)[0].strip()
     text = re.split(r'(?i)\s*источник\s*[:\.]?', text)[0].strip()
     text = re.split(r'(?i)\s*автор\s*[:\.]?', text)[0].strip()
-
     text = _strip_meta_prefix(text)
-
     text = re.sub(r'^\d+\.\s*', '', text).strip()
-
     return text if len(text) > 15 else raw.strip()
 
 
@@ -155,6 +189,8 @@ def clean_answer(raw: str) -> str:
     text = re.split(r'(?i)\s*автор\s*[:\.]?', text)[0].strip()
     return text or "—"
 
+
+# ─── Selenium ─────────────────────────────────────────────────────────────────
 
 def fetch_via_selenium(q_id: int) -> dict | None:
     try:
@@ -189,7 +225,6 @@ def fetch_via_selenium(q_id: int) -> dict | None:
     opts.add_argument("--no-zygote")
     opts.add_argument("--single-process")
     opts.add_argument("--disable-extensions")
-    opts.add_argument("--disable-software-rasterizer")
     opts.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
     opts.binary_location = "/usr/bin/chromium"
 
@@ -296,7 +331,7 @@ def fetch_via_selenium(q_id: int) -> dict | None:
 
         for t in content_texts:
             cleaned = clean_question(t)
-            if "?" in cleaned and len(cleaned) > 25 and not _META_MARKERS.match(cleaned):
+            if len(cleaned) > 25 and not _META_MARKERS.match(cleaned):
                 q_text = cleaned
                 break
 
@@ -309,7 +344,6 @@ def fetch_via_selenium(q_id: int) -> dict | None:
         if q_text:
             return {"id": q_id, "url": url,
                     "question": q_text, "answer": a_text or "—",
-                    "category": "Без категории",
                     "zachot": zachot_text, "comment": comment_text}
 
     except Exception as e:
@@ -323,30 +357,56 @@ def fetch_via_selenium(q_id: int) -> dict | None:
     return None
 
 
+# ─── Հարցի որոնում ────────────────────────────────────────────────────────────
+
 def find_question(diff_min: int, diff_max: int) -> dict | None:
-    ids    = [random.randint(1, 50000) for _ in range(MAX_ATTEMPTS)]
+    ids   = [random.randint(1, 50000) for _ in range(MAX_ATTEMPTS)]
     last_q = None
+
     for q_id in ids:
         q_data = fetch_via_selenium(q_id)
         if not q_data:
             continue
+
         diff = estimate_difficulty(q_data["question"], q_data["answer"])
         q_data["difficulty"] = diff
-        last_q = q_data
-        print(f"[FIND] ID={q_id} сложность={diff}, нужно {diff_min}-{diff_max}")
+
         q_lower = q_data["question"].lower()
         if any(x in q_lower for x in ["раздаточн", "на рисунке", "на фото", "на картинк",
-                                        "перед вами", "посмотрите на", "внимание, рисунок",
-                                        "см. рисунок", "см. фото"]):
-            print(f"[FIND] ⏭ ID={q_id} — раздаточный материал, пропускаем")
+                                       "перед вами", "посмотрите на", "внимание, рисунок",
+                                       "см. рисунок", "см. фото"]):
+            print(f"[FIND] ⏭ ID={q_id} — раздаточный материал")
             continue
+
+        if "http" in q_lower or "www." in q_lower:
+            print(f"[FIND] ⏭ ID={q_id} — URL կա")
+            continue
+
+        print(f"[FIND] ID={q_id} сложность={diff}, нужно {diff_min}-{diff_max}")
+
         if diff_min <= diff <= diff_max:
-            print("[FIND] ✅ Подходит, переводим...")
-            q_data["translation"] = translate_to_armenian(q_data["question"])
+            print(f"[FIND] 🤖 Gemini ստուգում...")
+            ai = gemini_analyze(q_data["question"], q_data["answer"])
+
+            if ai and not ai.get("ok"):
+                print(f"[FIND] ⏭ Gemini մերժեց: {ai.get('reason','')}")
+                last_q = q_data
+                last_q["translation"] = ai.get("translation") or translate_to_armenian(q_data["question"])
+                last_q["answer_hy"]   = ai.get("answer_hy") or translate_to_armenian(q_data["answer"])
+                continue
+
+            q_data["translation"] = (ai.get("translation") if ai else None) or translate_to_armenian(q_data["question"])
+            q_data["answer_hy"]   = (ai.get("answer_hy") if ai else None) or translate_to_armenian(q_data["answer"])
+            print(f"[FIND] ✅ Հաստատված")
             return q_data
+
+        last_q = q_data
         time.sleep(0.2)
-    if last_q:
-        last_q["translation"] = translate_to_armenian(last_q["question"])
+
+    if last_q and "translation" not in last_q:
+        ai = gemini_analyze(last_q["question"], last_q["answer"])
+        last_q["translation"] = (ai.get("translation") if ai else None) or translate_to_armenian(last_q["question"])
+        last_q["answer_hy"]   = (ai.get("answer_hy") if ai else None) or translate_to_armenian(last_q["answer"])
     return last_q
 
 
@@ -358,13 +418,15 @@ def bar(diff) -> str:
         return "?"
 
 
+# ─── Telegram handlers ────────────────────────────────────────────────────────
+
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message):
     await message.answer(
         "👋 <b>YsuShtok Bot</b> 🎯\n\n"
         "Հարցեր «Ի՞նչ, որտե՞ղ, ե՞րբ» խաղի համար\n"
         "<a href='https://gotquestions.online'>gotquestions.online</a>\n"
-        "Ֆիլտրացում ըստ բարդության + թարգմանություն հայերեն 🇦🇲\n\n"
+        "AI ֆիլտրացում + թարգմանություն հայերեն 🇦🇲\n\n"
         "📌 <b>Հրամաններ՝</b>\n"
         "/question — միջին բարդություն (4–7)\n"
         "/easy — հեշտ (1–3)\n"
@@ -400,10 +462,7 @@ async def _send(message: types.Message, diff_min: int, diff_max: int, label: str
         pass
 
     if not q_data:
-        await message.answer(
-            "❌ Не удалось получить вопрос. Попробуй ещё раз.",
-            parse_mode="HTML"
-        )
+        await message.answer("❌ Не удалось получить вопрос. Попробуй ещё раз.", parse_mode="HTML")
         return
 
     diff  = q_data.get("difficulty", "?")
@@ -417,8 +476,8 @@ async def _send(message: types.Message, diff_min: int, diff_max: int, label: str
         f"📊 <b>Բարդություն՝</b> {bar(diff)}"
     )
 
-    if q_data.get("answer") and q_data["answer"] != "—":
-        ans_hy = translate_to_armenian(q_data["answer"])
+    ans_hy = q_data.get("answer_hy") or translate_to_armenian(q_data.get("answer", "—"))
+    if ans_hy and ans_hy != "—":
         card += f"\n\n✅ <b>Պատասխան՝</b> <tg-spoiler>{ans_hy}</tg-spoiler>"
 
     if q_data.get("zachot"):
