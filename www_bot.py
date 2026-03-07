@@ -117,9 +117,11 @@ def clean_question(raw: str) -> str:
             continue
         if re.match(r"(?i)^вопрос\s+\d+", s):
             continue
+        # URL-ով տողերը հանել
+        if re.search(r'https?://|www\.', s):
+            continue
         filtered.append(line)
     text = "\n".join(filtered).strip()
-
     q_pos = text.find("?")
     if q_pos == -1:
         return _strip_meta_prefix(text)
