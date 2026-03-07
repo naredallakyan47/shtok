@@ -329,15 +329,23 @@ def fetch_via_selenium(q_id: int) -> dict | None:
             else:
                 content_texts.append(t)
 
+        _SKIP_RE = re.compile(
+            r'(?i)тур\s*\d*|лига|кубок|клуб\s+"|февр|январ|март|апрел|май\s+\d|июн|июл|август|сентябр|октябр|ноябр|декабр'
+        )
+
         for t in content_texts:
             cleaned = clean_question(t)
-            if len(cleaned) > 25 and not _META_MARKERS.match(cleaned):
+            if len(cleaned) > 40 and "?" in cleaned and not _META_MARKERS.search(cleaned) and not _SKIP_RE.search(cleaned):
                 q_text = cleaned
                 break
 
         if not q_text:
-            candidates = [clean_question(t) for t in content_texts
-                          if len(clean_question(t)) > 40 and not _META_MARKERS.match(clean_question(t))]
+            candidates = [
+                clean_question(t) for t in content_texts
+                if len(clean_question(t)) > 60
+                and not _META_MARKERS.search(clean_question(t))
+                and not _SKIP_RE.search(clean_question(t))
+            ]
             if candidates:
                 q_text = max(candidates, key=len)
 
