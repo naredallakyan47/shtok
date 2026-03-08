@@ -9,6 +9,7 @@ import os
 import random
 import re
 import time
+import sqlite3
 import requests
 from aiohttp import web
 from aiogram import Bot, Dispatcher, types
@@ -24,6 +25,37 @@ dp  = Dispatcher()
 
 # user_id -> "awaiting_keyword"
 user_states: dict[int, str] = {}
+
+DB_PATH = "ysushtok.db"
+
+def db_init():
+    con = sqlite3.connect(DB_PATH)
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS saved (
+            id        INTEGER PRIMARY KEY AUTOINCREMENT,
+            q_id      INTEGER NOT NULL,
+            user_id   INTEGER NOT NULL,
+            username  TEXT,
+            question  TEXT,
+            answer_hy TEXT,
+            url       TEXT,
+            status    TEXT DEFAULT 'saved',
+            saved_at  TEXT DEFAULT (datetime('now'))
+        )
+    """)
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS feedback (
+            id       INTEGER PRIMARY KEY AUTOINCREMENT,
+            q_id     INTEGER,
+            user_id  INTEGER,
+            grade    TEXT,
+            ts       TEXT DEFAULT (datetime('now'))
+        )
+    """)
+    con.commit()
+    con.close()
+
+db_init()
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -576,12 +608,17 @@ def bar(diff) -> str:
         return "?"
 
 
-def feedback_kb(q_id: int) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(inline_keyboard=[[
-        InlineKeyboardButton(text="👎 Bad",  callback_data=f"fb_bad_{q_id}"),
-        InlineKeyboardButton(text="👍 OK",   callback_data=f"fb_ok_{q_id}"),
-        InlineKeyboardButton(text="🔥 Good", callback_data=f"fb_good_{q_id}"),
-    ]])
+def action_kb(q_id: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="👎 Bad",  callback_data=f"fb_bad_{q_id}"),
+            InlineKeyboardButton(text="👍 OK",   callback_data=f"fb_ok_{q_id}"),
+            InlineKeyboardButton(text="🔥 Good", callback_data=f"fb_good_{q_id}"),
+        ],
+        [
+            InlineKeyboardButton(text="📌 Պահել", callback_data=f"save_{q_id}"),
+        ]
+    ])
 
 
 def build_card(q_data: dict) -> str:
@@ -622,7 +659,8 @@ async def cmd_start(message: types.Message):
         "📌 <b>Հրամաններ՝</b>\n"
         "/question — ռանդոմ կամ բառով (4–7)\n"
         "/easy — հեշտ (1–3)\n"
-        "/hard — բարդ (8–10)",
+        "/hard — բարդ (8–10)\n"
+        "/saved — ակումբի պահված հարցերը",
         parse_mode="HTML", disable_web_page_preview=True,
     )
 
@@ -698,7 +736,7 @@ async def handle_keyword(message: types.Message):
 
     card = build_card(q_data)
     await message.answer(card, parse_mode="HTML", disable_web_page_preview=True,
-                         reply_markup=feedback_kb(q_data["id"]))
+                         reply_markup=action_kb(q_data["id"]))
     print(f"[BOT] ✅ Search ID={q_data['id']} keyword={keyword}")
 
 
@@ -729,7 +767,7 @@ async def _send(message: types.Message, diff_min: int, diff_max: int, label: str
 
     card = build_card(q_data)
     await message.answer(card, parse_mode="HTML", disable_web_page_preview=True,
-                         reply_markup=feedback_kb(q_data["id"]))
+                         reply_markup=action_kb(q_data["id"]))
     print(f"[BOT] ✅ Отправлен ID={q_data['id']} сложность={q_data.get('difficulty','?')}")
 
 
@@ -739,22 +777,177 @@ async def cb_feedback(callback: types.CallbackQuery):
     grade = parts[1]
     q_id  = parts[2] if len(parts) > 2 else "?"
 
+    if grade == "done":
+        await callback.answer()
+        return
+
     labels = {"bad": "👎 Bad", "ok": "👍 OK", "good": "🔥 Good"}
     text   = labels.get(grade, grade)
 
-    print(f"[FEEDBACK] user={callback.from_user.id} q={q_id} grade={grade}")
+    try:
+        con = sqlite3.connect(DB_PATH)
+        con.execute("INSERT INTO feedback (q_id, user_id, grade) VALUES (?,?,?)",
+                    (q_id, callback.from_user.id, grade))
+        con.commit()
+        con.close()
+    except Exception as e:
+        print(f"[DB] feedback error: {e}")
 
-    await callback.message.edit_reply_markup(
-        reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
-            InlineKeyboardButton(text=f"✅ {text}", callback_data="fb_done")
-        ]])
-    )
+    try:
+        cur_kb = callback.message.reply_markup.inline_keyboard
+        new_rows = []
+        for row in cur_kb:
+            new_row = []
+            for btn in row:
+                if btn.callback_data and btn.callback_data.startswith("fb_") and not btn.callback_data == "fb_done":
+                    if btn.callback_data == callback.data:
+                        new_row.append(InlineKeyboardButton(text=f"✅ {text}", callback_data="fb_done"))
+                    else:
+                        new_row.append(btn)
+                else:
+                    new_row.append(btn)
+            new_rows.append(new_row)
+        await callback.message.edit_reply_markup(reply_markup=InlineKeyboardMarkup(inline_keyboard=new_rows))
+    except Exception:
+        pass
+
     await callback.answer(f"{text} — շնորհակալություն!")
 
 
 @dp.callback_query(lambda c: c.data == "fb_done")
 async def cb_fb_done(callback: types.CallbackQuery):
     await callback.answer()
+
+
+@dp.callback_query(lambda c: c.data and c.data.startswith("save_"))
+async def cb_save(callback: types.CallbackQuery):
+    q_id = callback.data.split("_", 1)[1]
+    user = callback.from_user
+    uname = user.username or user.first_name or str(user.id)
+
+    try:
+        con = sqlite3.connect(DB_PATH)
+        exists = con.execute("SELECT id FROM saved WHERE q_id=?", (q_id,)).fetchone()
+        if exists:
+            con.close()
+            await callback.answer("Արդեն պահված է ❕", show_alert=True)
+            return
+
+        text = callback.message.text or callback.message.caption or ""
+        lines = text.split("\n")
+        question_line = next((l for l in lines if l and not l.startswith("🔗") and not l.startswith("🇦🇲")
+                              and not l.startswith("📊") and not l.startswith("✅")
+                              and not l.startswith("☑") and not l.startswith("💬")), "")
+        answer_line = ""
+        for l in lines:
+            if "Պատասխան՝" in l:
+                answer_line = l.replace("✅", "").replace("Պատասխան՝", "").strip()
+                break
+
+        url = f"https://gotquestions.online/question/{q_id}"
+
+        con.execute(
+            "INSERT INTO saved (q_id, user_id, username, question, answer_hy, url) VALUES (?,?,?,?,?,?)",
+            (q_id, user.id, uname, question_line.strip(), answer_line, url)
+        )
+        con.commit()
+        con.close()
+    except Exception as e:
+        print(f"[DB] save error: {e}")
+        await callback.answer("❌ Սխալ", show_alert=True)
+        return
+
+    try:
+        cur_kb = callback.message.reply_markup.inline_keyboard
+        new_rows = []
+        for row in cur_kb:
+            new_row = []
+            for btn in row:
+                if btn.callback_data == f"save_{q_id}":
+                    new_row.append(InlineKeyboardButton(text="📌 Պահված ✅", callback_data="saved_done"))
+                else:
+                    new_row.append(btn)
+            new_rows.append(new_row)
+        await callback.message.edit_reply_markup(reply_markup=InlineKeyboardMarkup(inline_keyboard=new_rows))
+    except Exception:
+        pass
+
+    await callback.answer(f"📌 Պահված է @{uname}-ի կողմից", show_alert=True)
+
+
+@dp.callback_query(lambda c: c.data == "saved_done")
+async def cb_saved_done(callback: types.CallbackQuery):
+    await callback.answer("Արդեն պահված է ✅")
+
+
+@dp.callback_query(lambda c: c.data and c.data.startswith("status_"))
+async def cb_status(callback: types.CallbackQuery):
+    parts  = callback.data.split("_")
+    action = parts[1]
+    row_id = parts[2]
+
+    status_map = {"used": "✅ Վերցված", "reject": "❌ Մերժված", "saved": "📌 Պահված"}
+    new_status = {"used": "used", "reject": "rejected"}.get(action, "saved")
+    label = status_map.get(action, "?")
+
+    try:
+        con = sqlite3.connect(DB_PATH)
+        con.execute("UPDATE saved SET status=? WHERE id=?", (new_status, row_id))
+        con.commit()
+        con.close()
+    except Exception as e:
+        print(f"[DB] status error: {e}")
+
+    await callback.answer(f"{label} — նշված է")
+    await callback.message.edit_reply_markup(
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(text=label, callback_data="noop")
+        ]])
+    )
+
+
+@dp.callback_query(lambda c: c.data == "noop")
+async def cb_noop(callback: types.CallbackQuery):
+    await callback.answer()
+
+
+@dp.message(Command("saved"))
+async def cmd_saved(message: types.Message):
+    try:
+        con = sqlite3.connect(DB_PATH)
+        rows = con.execute(
+            "SELECT id, q_id, username, question, answer_hy, url, status, saved_at FROM saved ORDER BY saved_at DESC LIMIT 20"
+        ).fetchall()
+        con.close()
+    except Exception as e:
+        await message.answer(f"❌ DB սխալ: {e}")
+        return
+
+    if not rows:
+        await message.answer("📭 Պահված հարցեր չկան։\nՕգտագործիր 📌 կոճակը հարց պահելու համար։")
+        return
+
+    status_icons = {"saved": "📌", "used": "✅", "rejected": "❌"}
+
+    for row in rows:
+        row_id, q_id, uname, question, answer_hy, url, status, saved_at = row
+        icon = status_icons.get(status, "📌")
+        date = saved_at[:10] if saved_at else "?"
+
+        card = (
+            f"{icon} <a href='{url}'>Հարց #{q_id}</a> — <b>@{uname}</b> · {date}\n\n"
+            f"{question or '—'}\n\n"
+            f"✅ <tg-spoiler>{answer_hy or '—'}</tg-spoiler>"
+        )
+
+        kb = None
+        if status == "saved":
+            kb = InlineKeyboardMarkup(inline_keyboard=[[
+                InlineKeyboardButton(text="✅ Վերցնել",  callback_data=f"status_used_{row_id}"),
+                InlineKeyboardButton(text="❌ Մերժել",   callback_data=f"status_reject_{row_id}"),
+            ]])
+
+        await message.answer(card, parse_mode="HTML", disable_web_page_preview=True, reply_markup=kb)
 
 
 async def main():
