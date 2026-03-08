@@ -369,57 +369,88 @@ def fetch_via_selenium(q_id: int) -> dict | None:
     return None
 
 
-# ─── Բառով որոնում ────────────────────────────────────────────────────────────
+def _selenium_search_ids(keyword: str) -> list[int]:
+    from selenium import webdriver
+    from selenium.webdriver.chrome.options import Options
+    from selenium.webdriver.chrome.service import Service
+    from selenium.webdriver.common.by import By
+    from selenium.webdriver.support.ui import WebDriverWait
+    from selenium.webdriver.support import expected_conditions as EC
+    from selenium.webdriver.common.keys import Keys
 
-def fetch_by_search(keyword: str) -> dict | None:
-    """Поиск вопроса по ключевому слову через Selenium"""
-    print(f"[SEARCH] Ищу по ключу: {keyword}")
+    opts = Options()
+    opts.add_argument("--headless")
+    opts.add_argument("--no-sandbox")
+    opts.add_argument("--disable-dev-shm-usage")
+    opts.add_argument("--disable-gpu")
+    opts.add_argument("--no-zygote")
+    opts.add_argument("--single-process")
+    opts.add_argument("--disable-extensions")
+    opts.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+    opts.binary_location = "/usr/bin/chromium"
+
+    driver = webdriver.Chrome(service=Service("/usr/bin/chromedriver"), options=opts)
+    found_ids = []
 
     try:
-        from selenium import webdriver
-        from selenium.webdriver.chrome.options import Options
-        from selenium.webdriver.chrome.service import Service
-        from selenium.webdriver.common.by import By
-        from selenium.webdriver.support.ui import WebDriverWait
-        from selenium.webdriver.support import expected_conditions as EC
-        from bs4 import BeautifulSoup
-
-        opts = Options()
-        opts.add_argument("--headless")
-        opts.add_argument("--no-sandbox")
-        opts.add_argument("--disable-dev-shm-usage")
-        opts.add_argument("--disable-gpu")
-        opts.add_argument("--no-zygote")
-        opts.add_argument("--single-process")
-        opts.add_argument("--disable-extensions")
-        opts.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
-        opts.binary_location = "/usr/bin/chromium"
-
-        service = Service("/usr/bin/chromedriver")
-        driver  = webdriver.Chrome(service=service, options=opts)
-
-        found_ids = []
+        driver.get("https://gotquestions.online/")
 
         try:
-            search_url = f"https://gotquestions.online/search?q={requests.utils.quote(keyword)}"
-            print(f"[SEARCH] Открываю: {search_url}")
-            driver.get(search_url)
-
-            try:
-                btn = WebDriverWait(driver, 5).until(
-                    EC.element_to_be_clickable(
-                        (By.XPATH, "//button[contains(text(),'Принять') or contains(text(),'принять')]")
-                    )
+            btn = WebDriverWait(driver, 5).until(
+                EC.element_to_be_clickable(
+                    (By.XPATH, "//button[contains(text(),'Принять') or contains(text(),'принять')]")
                 )
-                btn.click()
-                time.sleep(0.5)
+            )
+            btn.click()
+            time.sleep(0.5)
+        except Exception:
+            pass
+
+        time.sleep(2)
+
+        inp = None
+        for xpath in [
+            "//input[@type='search']",
+            "//input[contains(@placeholder,'оиск') or contains(@placeholder,'ищи') or contains(@placeholder,'найти')]",
+            "//input[@type='text']",
+        ]:
+            try:
+                inp = driver.find_element(By.XPATH, xpath)
+                break
             except Exception:
                 pass
 
-            time.sleep(3)
+        if inp is None:
+            print("[SEARCH] Поле поиска не найдено")
+            return []
 
-            links = driver.find_elements(By.XPATH, "//a[contains(@href, '/question/')]")
-            for link in links:
+        inp.click()
+        time.sleep(0.3)
+        inp.send_keys(keyword)
+        time.sleep(0.5)
+        inp.send_keys(Keys.RETURN)
+        time.sleep(4)
+
+        for link in driver.find_elements(By.XPATH, "//a[contains(@href, '/question/')]"):
+            href = link.get_attribute("href") or ""
+            m = re.search(r"/question/(\d+)", href)
+            if m:
+                q_id = int(m.group(1))
+                if q_id not in found_ids:
+                    found_ids.append(q_id)
+
+        print(f"[SEARCH] Найдено после RETURN: {found_ids[:10]}")
+
+        if not found_ids:
+            for btn_el in driver.find_elements(By.XPATH, "//button[@type='submit'] | //button[contains(@class,'search')]"):
+                try:
+                    btn_el.click()
+                    time.sleep(3)
+                    break
+                except Exception:
+                    pass
+
+            for link in driver.find_elements(By.XPATH, "//a[contains(@href, '/question/')]"):
                 href = link.get_attribute("href") or ""
                 m = re.search(r"/question/(\d+)", href)
                 if m:
@@ -427,67 +458,63 @@ def fetch_by_search(keyword: str) -> dict | None:
                     if q_id not in found_ids:
                         found_ids.append(q_id)
 
-            print(f"[SEARCH] Найдено ссылок: {len(found_ids)} → {found_ids[:10]}")
-
-            if not found_ids:
-                try:
-                    inp = driver.find_element(By.XPATH, "//input[@type='search' or @type='text' or contains(@placeholder,'оиск') or contains(@placeholder,'ищи')]")
-                    inp.clear()
-                    inp.send_keys(keyword)
-                    time.sleep(0.5)
-                    inp.send_keys("\n")
-                    time.sleep(3)
-
-                    links = driver.find_elements(By.XPATH, "//a[contains(@href, '/question/')]")
-                    for link in links:
-                        href = link.get_attribute("href") or ""
-                        m = re.search(r"/question/(\d+)", href)
-                        if m:
-                            q_id = int(m.group(1))
-                            if q_id not in found_ids:
-                                found_ids.append(q_id)
-
-                    print(f"[SEARCH] После input найдено: {len(found_ids)}")
-                except Exception as e:
-                    print(f"[SEARCH] Input поиск ошибка: {e}")
-
-        finally:
-            try:
-                driver.quit()
-            except Exception:
-                pass
+            print(f"[SEARCH] Найдено после кнопки: {found_ids[:10]}")
 
         if not found_ids:
-            print(f"[SEARCH] ID не найдены для '{keyword}'")
-            return None
+            current_url = driver.current_url
+            print(f"[SEARCH] Текущий URL: {current_url}")
+            print(f"[SEARCH] Page title: {driver.title}")
+            page_src = driver.page_source[:500]
+            print(f"[SEARCH] Page src начало: {page_src}")
 
-        random.shuffle(found_ids)
+    finally:
+        try:
+            driver.quit()
+        except Exception:
+            pass
 
-        for q_id in found_ids[:8]:
-            q_data = fetch_via_selenium(q_id)
-            if not q_data:
-                continue
+    return found_ids
 
-            q_lower = q_data["question"].lower()
-            if any(x in q_lower for x in ["раздаточн", "на рисунке", "на фото",
-                                           "на картинк", "перед вами", "посмотрите на"]):
-                print(f"[SEARCH] ⏭ ID={q_id} — раздаточный материал")
-                continue
 
-            diff = estimate_difficulty(q_data["question"], q_data["answer"])
-            q_data["difficulty"] = diff
+def fetch_by_search(keyword: str) -> dict | None:
+    print(f"[SEARCH] Ищу по ключу: {keyword}")
 
-            ai = gemini_analyze(q_data["question"], q_data["answer"])
-            q_data["translation"] = (ai.get("translation") if ai else None) or translate_to_armenian(q_data["question"])
-            q_data["answer_hy"]   = (ai.get("answer_hy") if ai else None) or translate_to_armenian(q_data["answer"])
-
-            print(f"[SEARCH] ✅ Найден ID={q_id}")
-            return q_data
-
+    try:
+        found_ids = _selenium_search_ids(keyword)
     except Exception as e:
-        print(f"[SEARCH] Критическая ошибка: {e}")
+        print(f"[SEARCH] Критическая ошибка поиска: {e}")
+        found_ids = []
+
+    if not found_ids:
+        print(f"[SEARCH] ID не найдены для '{keyword}'")
+        return None
+
+    random.shuffle(found_ids)
+
+    for q_id in found_ids[:8]:
+        q_data = fetch_via_selenium(q_id)
+        if not q_data:
+            continue
+
+        q_lower = q_data["question"].lower()
+        if any(x in q_lower for x in ["раздаточн", "на рисунке", "на фото",
+                                       "на картинк", "перед вами", "посмотрите на"]):
+            print(f"[SEARCH] ⏭ ID={q_id} — раздаточный")
+            continue
+
+        diff = estimate_difficulty(q_data["question"], q_data["answer"])
+        q_data["difficulty"] = diff
+
+        ai = gemini_analyze(q_data["question"], q_data["answer"])
+        q_data["translation"] = (ai.get("translation") if ai else None) or translate_to_armenian(q_data["question"])
+        q_data["answer_hy"]   = (ai.get("answer_hy") if ai else None) or translate_to_armenian(q_data["answer"])
+
+        print(f"[SEARCH] ✅ ID={q_id}")
+        return q_data
 
     return None
+
+
 # ─── Հարցի ռանդոմ որոնում ────────────────────────────────────────────────────
 
 def find_question(diff_min: int, diff_max: int) -> dict | None:
@@ -547,6 +574,14 @@ def bar(diff) -> str:
         return f"{'█'*d}{'░'*(10-d)} {d}/10"
     except Exception:
         return "?"
+
+
+def feedback_kb(q_id: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text="👎 Bad",  callback_data=f"fb_bad_{q_id}"),
+        InlineKeyboardButton(text="👍 OK",   callback_data=f"fb_ok_{q_id}"),
+        InlineKeyboardButton(text="🔥 Good", callback_data=f"fb_good_{q_id}"),
+    ]])
 
 
 def build_card(q_data: dict) -> str:
@@ -662,7 +697,8 @@ async def handle_keyword(message: types.Message):
         return
 
     card = build_card(q_data)
-    await message.answer(card, parse_mode="HTML", disable_web_page_preview=True)
+    await message.answer(card, parse_mode="HTML", disable_web_page_preview=True,
+                         reply_markup=feedback_kb(q_data["id"]))
     print(f"[BOT] ✅ Search ID={q_data['id']} keyword={keyword}")
 
 
@@ -692,8 +728,33 @@ async def _send(message: types.Message, diff_min: int, diff_max: int, label: str
         return
 
     card = build_card(q_data)
-    await message.answer(card, parse_mode="HTML", disable_web_page_preview=True)
+    await message.answer(card, parse_mode="HTML", disable_web_page_preview=True,
+                         reply_markup=feedback_kb(q_data["id"]))
     print(f"[BOT] ✅ Отправлен ID={q_data['id']} сложность={q_data.get('difficulty','?')}")
+
+
+@dp.callback_query(lambda c: c.data and c.data.startswith("fb_"))
+async def cb_feedback(callback: types.CallbackQuery):
+    parts = callback.data.split("_")
+    grade = parts[1]
+    q_id  = parts[2] if len(parts) > 2 else "?"
+
+    labels = {"bad": "👎 Bad", "ok": "👍 OK", "good": "🔥 Good"}
+    text   = labels.get(grade, grade)
+
+    print(f"[FEEDBACK] user={callback.from_user.id} q={q_id} grade={grade}")
+
+    await callback.message.edit_reply_markup(
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(text=f"✅ {text}", callback_data="fb_done")
+        ]])
+    )
+    await callback.answer(f"{text} — շնորհակալություն!")
+
+
+@dp.callback_query(lambda c: c.data == "fb_done")
+async def cb_fb_done(callback: types.CallbackQuery):
+    await callback.answer()
 
 
 async def main():
