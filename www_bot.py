@@ -41,6 +41,13 @@ TOPIC_KEYWORDS = {
         "хорькрукс", "horcrux", "диагон-аллея", "хогвартс-экспресс",
     ],
     "black": ["внимание, черный ящик!", "Внимание, чёрный ящик!"],
+    "music": [
+        "музык", "песн", "опер", "симфони", "мелоди", "композитор", "дирижёр",
+        "оркестр", "инструмент", "скрипк", "фортепиан", "пианин", "гитар",
+        "баян", "аккордеон", "флейт", "виолончел", "барабан", "труб",
+        "бетховен", "моцарт", "чайковск", "бах", "шопен", "джаз", "рок",
+        "поп", "классическ", "хор", "солист", "концерт", "альбом", "нота",
+    ],
     "general": [],
 }
 
@@ -479,7 +486,8 @@ async def cmd_start(message: types.Message):
         "📌 <b>Commands:</b>\n"
         "/question — medium difficulty (4–7)\n"
         "/easy — easy (1–3)\n"
-        "/hard — hard (8–10)",
+        "/hard — hard (8–10)\n"
+        "/search <word> — search by keyword",
         parse_mode="HTML", disable_web_page_preview=True,
     )
 
@@ -522,6 +530,7 @@ async def handle_topic(callback: types.CallbackQuery):
         "sport":   "Sport 🏆",
         "hp":      "Harry Potter ⚡",
         "black":   "Black Box 📦",
+        "music":   "Music 🎵",
         "general": "General 🌍",
     }
     label = topic_labels.get(topic, topic)
@@ -588,6 +597,65 @@ async def handle_feedback(callback: types.CallbackQuery):
         await callback.message.edit_reply_markup(reply_markup=None)
     except Exception:
         pass
+
+
+@dp.message(Command("search"))
+async def handle_search(message: types.Message):
+    word = message.text.strip().split(maxsplit=1)
+    if len(word) < 2 or not word[1].strip():
+        await message.answer("Usage: /search \u003cword\u003e\nExample: /search ладонь")
+        return
+    keyword = word[1].strip().lower()
+    wait = await message.answer(f"🔍 Searching for questions with <b>{keyword}</b>...", parse_mode="HTML")
+
+    def search_by_word():
+        for _ in range(15):
+            q_id = random.randint(1, 50000)
+            q_data = fetch_via_selenium(q_id)
+            if not q_data:
+                continue
+            q_lower = q_data["question"].lower()
+            a_lower = q_data["answer"].lower()
+            if keyword in q_lower or keyword in a_lower:
+                diff = estimate_difficulty(q_data["question"], q_data["answer"])
+                q_data["difficulty"] = diff
+                ai = gemini_analyze(q_data["question"], q_data["answer"])
+                q_data["translation"] = (ai.get("translation") if ai else None) or translate_to_armenian(q_data["question"])
+                q_data["answer_hy"]   = (ai.get("answer_hy") if ai else None) or translate_to_armenian(q_data["answer"])
+                return q_data
+        return None
+
+    loop   = asyncio.get_event_loop()
+    q_data = await loop.run_in_executor(None, search_by_word)
+
+    try:
+        await bot.delete_message(message.chat.id, wait.message_id)
+    except Exception:
+        pass
+
+    if not q_data:
+        await message.answer(f"❌ No questions found with <b>{keyword}</b>. Try another word.", parse_mode="HTML")
+        return
+
+    diff  = q_data.get("difficulty", "?")
+    trans = q_data.get("translation", "—")
+    card = (
+        f"🔍 <b>Search:</b> {keyword}\n"
+        f"🔗 <a href='{q_data['url']}'>Question #{q_data['id']}</a>\n\n"
+        f"<b>{q_data['question']}</b>\n\n"
+        f"🇦🇲 <b>Armenian:</b>\n<i>{trans}</i>\n\n"
+        f"📊 <b>Difficulty:</b> {bar(diff)}"
+    )
+    ans_hy = q_data.get("answer_hy") or translate_to_armenian(q_data.get("answer", "—"))
+    if ans_hy and ans_hy != "—":
+        card += f"\n\n✅ <b>Answer:</b> <tg-spoiler>{ans_hy}</tg-spoiler>"
+    if q_data.get("zachot"):
+        card += f"\n☑️ <b>Also accepted:</b> <tg-spoiler>{translate_to_armenian(q_data['zachot'])}</tg-spoiler>"
+    if q_data.get("comment"):
+        card += f"\n\n💬 <b>Comment:</b> <tg-spoiler>{translate_to_armenian(q_data['comment'])}</tg-spoiler>"
+
+    await message.answer(card, parse_mode="HTML", disable_web_page_preview=True,
+                         reply_markup=feedback_keyboard(q_data["id"]))
 
 
 async def main():
