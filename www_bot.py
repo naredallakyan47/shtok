@@ -48,6 +48,12 @@ TOPIC_KEYWORDS = {
         "бетховен", "моцарт", "чайковск", "бах", "шопен", "джаз", "рок",
         "поп", "классическ", "хор", "солист", "концерт", "альбом", "нота",
     ],
+    "song": [
+        "песн", "куплет", "припев", "строфа", "стихотворени", "рифм",
+        "лирик", "автор песн", "исполнитель", "группа", "певец", "певица",
+        "хит", "шлягер", "романс", "баллад", "гимн", "ария", "мотив",
+        "мелоди", "ноты", "текст песн", "слова песн", "spotify", "youtube",
+    ],
     "general": [],
 }
 
@@ -392,6 +398,17 @@ def fetch_via_selenium(q_id: int) -> dict | None:
     return None
 
 
+def matches_topic(question: str, topic: str) -> bool:
+    if topic == "general":
+        return True
+    q_lower = question.lower()
+    keywords = TOPIC_KEYWORDS.get(topic, [])
+    if topic == "black":
+        q_clean = re.sub(r'[!?,.]', '', q_lower)
+        return any(re.sub(r'[!?,.]', '', kw) in q_clean[:80] for kw in keywords)
+    return any(kw in q_lower for kw in keywords)
+
+
 def find_question(diff_min: int, diff_max: int, topic: str = "general") -> dict | None:
     ids    = [random.randint(1, 50000) for _ in range(MAX_ATTEMPTS)]
     last_q = None
@@ -487,7 +504,8 @@ async def cmd_start(message: types.Message):
         "/question — medium difficulty (4–7)\n"
         "/easy — easy (1–3)\n"
         "/hard — hard (8–10)\n"
-        "/search WORD — search by keyword",
+        "/search WORD — search by keyword\n"
+        "Topics: Sport, Harry Potter, Black Box, Music, Song, General",
         parse_mode="HTML", disable_web_page_preview=True,
     )
 
@@ -531,6 +549,7 @@ async def handle_topic(callback: types.CallbackQuery):
         "hp":      "Harry Potter ⚡",
         "black":   "Black Box 📦",
         "music":   "Music 🎵",
+        "song":    "Song 🎤",
         "general": "General 🌍",
     }
     label = topic_labels.get(topic, topic)
