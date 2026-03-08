@@ -487,7 +487,7 @@ async def cmd_start(message: types.Message):
         "/question — medium difficulty (4–7)\n"
         "/easy — easy (1–3)\n"
         "/hard — hard (8–10)\n"
-        "/search <word> — search by keyword",
+        "/search WORD — search by keyword",
         parse_mode="HTML", disable_web_page_preview=True,
     )
 
@@ -603,7 +603,7 @@ async def handle_feedback(callback: types.CallbackQuery):
 async def handle_search(message: types.Message):
     word = message.text.strip().split(maxsplit=1)
     if len(word) < 2 or not word[1].strip():
-        await message.answer("Usage: /search \u003cword\u003e\nExample: /search ладонь")
+        await message.answer("Usage: /search WORD\nExample: /search ладонь")
         return
     keyword = word[1].strip().lower()
     wait = await message.answer(f"🔍 Searching for questions with <b>{keyword}</b>...", parse_mode="HTML")
