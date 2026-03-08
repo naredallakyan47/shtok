@@ -54,7 +54,7 @@ def gemini_analyze(question: str, answer: str, topic: str = "general") -> dict |
     elif topic == "hp":
         topic_hint = "Вопрос должен быть о вселенной Гарри Поттера. Если нет — ok: false."
     elif topic == "black":
-        topic_hint = "Вопрос должен начинаться с 'Внимание, чёрный ящик'. Если нет — ok: false."
+        topic_hint = "Вопрос должен начинаться с 'Внимание, чёрный ящик!'. Если нет — ok: false."
 
     prompt = f"""Ты помощник для армянской игры «Что? Где? Когда?». Проанализируй вопрос и ответь ТОЛЬКО в формате JSON.
 
