@@ -40,7 +40,7 @@ TOPIC_KEYWORDS = {
         "волшебная палочка", "зельевар", "мракоборец", "auror",
         "хорькрукс", "horcrux", "диагон-аллея", "хогвартс-экспресс",
     ],
-    "black": ["внимание, черный ящик!", "Внимание, чёрный ящик!"],
+    "black": ["внимание, черный ящик", "внимание, чёрный ящик"],
     "music": [
         "музык", "песн", "опер", "симфони", "мелоди", "композитор", "дирижёр",
         "оркестр", "инструмент", "скрипк", "фортепиан", "пианин", "гитар",
@@ -57,6 +57,84 @@ TOPIC_KEYWORDS = {
     "general": [],
 }
 
+TOPIC_SEARCH = {
+    "hp":      "гарри поттер",
+    "sport":   "спорт",
+    "black":   "черный ящик",
+    "music":   "музыка",
+    "song":    "песня",
+    "general": None,
+}
+
+
+def search_question_ids(keyword: str, max_ids: int = 30) -> list:
+    """Selenium-ов gotquestions search-иц question ID-нери варцел"""
+    try:
+        from selenium import webdriver
+        from selenium.webdriver.chrome.options import Options
+        from selenium.webdriver.chrome.service import Service
+        from selenium.webdriver.common.by import By
+        from selenium.webdriver.support.ui import WebDriverWait
+        from selenium.webdriver.support import expected_conditions as EC
+        import urllib.parse
+    except ImportError:
+        return []
+
+    opts = Options()
+    opts.add_argument("--headless")
+    opts.add_argument("--no-sandbox")
+    opts.add_argument("--disable-dev-shm-usage")
+    opts.add_argument("--disable-gpu")
+    opts.add_argument("--no-zygote")
+    opts.add_argument("--single-process")
+    opts.add_argument("--disable-extensions")
+    opts.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+    opts.binary_location = "/usr/bin/chromium"
+
+    driver = None
+    ids = []
+    try:
+        encoded = urllib.parse.quote(keyword)
+        url = f"https://gotquestions.online/search?q={encoded}"
+        service = Service("/usr/bin/chromedriver")
+        driver = webdriver.Chrome(service=service, options=opts)
+        driver.get(url)
+
+        try:
+            WebDriverWait(driver, 8).until(
+                EC.presence_of_element_located((By.XPATH, "//a[contains(@href, '/question/')]"))
+            )
+        except Exception:
+            pass
+
+        import time
+        time.sleep(2)
+
+        links = driver.find_elements(By.XPATH, "//a[contains(@href, '/question/')]")
+        seen = set()
+        for link in links:
+            href = link.get_attribute("href") or ""
+            m = re.search(r'/question/(\d+)', href)
+            if m:
+                qid = int(m.group(1))
+                if qid not in seen:
+                    seen.add(qid)
+                    ids.append(qid)
+                if len(ids) >= max_ids:
+                    break
+
+        print(f"[SEARCH] '{keyword}' — найдено {len(ids)} IDs: {ids[:5]}")
+    except Exception as e:
+        print(f"[SEARCH] Ошибка: {e}")
+    finally:
+        if driver:
+            try:
+                driver.quit()
+            except Exception:
+                pass
+    return ids
+
+
 
 # ─── Gemini AI ────────────────────────────────────────────────────────────────
 
@@ -67,7 +145,7 @@ def gemini_analyze(question: str, answer: str, topic: str = "general") -> dict |
     elif topic == "hp":
         topic_hint = "Вопрос должен быть о вселенной Гарри Поттера. Если нет — ok: false."
     elif topic == "black":
-        topic_hint = "Вопрос должен начинаться с 'Внимание, чёрный ящик!'. Если нет — ok: false."
+        topic_hint = "Вопрос должен начинаться с 'Внимание, чёрный ящик'. Если нет — ok: false."
 
     prompt = f"""Ты помощник для армянской игры «Что? Где? Когда?». Проанализируй вопрос и ответь ТОЛЬКО в формате JSON.
 
@@ -410,7 +488,19 @@ def matches_topic(question: str, topic: str) -> bool:
 
 
 def find_question(diff_min: int, diff_max: int, topic: str = "general") -> dict | None:
-    ids    = [random.randint(1, 50000) for _ in range(MAX_ATTEMPTS)]
+    # Тема-ных поисковикиц ID-нер варцел
+    search_kw = TOPIC_SEARCH.get(topic)
+    if search_kw:
+        print(f"[FIND] 🔍 Searching gotquestions for '{search_kw}'...")
+        found_ids = search_question_ids(search_kw, max_ids=30)
+        if found_ids:
+            random.shuffle(found_ids)
+            ids = found_ids[:MAX_ATTEMPTS]
+        else:
+            print(f"[FIND] Search empty, falling back to random")
+            ids = [random.randint(1, 50000) for _ in range(MAX_ATTEMPTS)]
+    else:
+        ids = [random.randint(1, 50000) for _ in range(MAX_ATTEMPTS)]
     last_q = None
 
     for q_id in ids:
@@ -628,20 +718,22 @@ async def handle_search(message: types.Message):
     wait = await message.answer(f"🔍 Searching for questions with <b>{keyword}</b>...", parse_mode="HTML")
 
     def search_by_word():
-        for _ in range(15):
-            q_id = random.randint(1, 50000)
+        # Нахал сайтի поисковикиц ID-нер
+        found_ids = search_question_ids(keyword, max_ids=20)
+        if not found_ids:
+            print(f"[SEARCH] No IDs found for '{keyword}', trying random")
+            found_ids = [random.randint(1, 50000) for _ in range(15)]
+        random.shuffle(found_ids)
+        for q_id in found_ids[:15]:
             q_data = fetch_via_selenium(q_id)
             if not q_data:
                 continue
-            q_lower = q_data["question"].lower()
-            a_lower = q_data["answer"].lower()
-            if keyword in q_lower or keyword in a_lower:
-                diff = estimate_difficulty(q_data["question"], q_data["answer"])
-                q_data["difficulty"] = diff
-                ai = gemini_analyze(q_data["question"], q_data["answer"])
-                q_data["translation"] = (ai.get("translation") if ai else None) or translate_to_armenian(q_data["question"])
-                q_data["answer_hy"]   = (ai.get("answer_hy") if ai else None) or translate_to_armenian(q_data["answer"])
-                return q_data
+            diff = estimate_difficulty(q_data["question"], q_data["answer"])
+            q_data["difficulty"] = diff
+            ai = gemini_analyze(q_data["question"], q_data["answer"])
+            q_data["translation"] = (ai.get("translation") if ai else None) or translate_to_armenian(q_data["question"])
+            q_data["answer_hy"]   = (ai.get("answer_hy") if ai else None) or translate_to_armenian(q_data["answer"])
+            return q_data
         return None
 
     loop   = asyncio.get_event_loop()
