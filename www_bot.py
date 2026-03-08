@@ -1,7 +1,7 @@
 """
-YsuShtok Bot — Telegram բոt «Ի՞nч, Որтеՠgh, Е՞rb» khaghi hamar
-Aghbyur: gotquestions.online
-Gemini AI + թеmaner + feedback
+YsuShtok Bot — Telegram բոտ «Ի՞նչ, Որտե՞ղ, Ե՞րբ» խաղի համար
+Աղբյուր՝ gotquestions.online
+Gemini AI ֆիլտրացում + թարգմանություն
 """
 
 import asyncio
@@ -11,184 +11,71 @@ import re
 import time
 import requests
 from aiohttp import web
-from aiogram import Bot, Dispatcher, types, F
+from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
 TG_TOKEN   = os.environ.get("TG_TOKEN", "8294427825:AAEc1aZdUNoqlRgZj01DtAT0ryBtvMvhKlQ")
 GEMINI_KEY = os.environ.get("GEMINI_API_KEY", "AIzaSyBzyT1b_r7NyC5ys8wzifJv2uW_5XvPwZ0")
-MAX_ATTEMPTS = 12
+MAX_ATTEMPTS = 10
 
 bot = Bot(token=TG_TOKEN)
 dp  = Dispatcher()
 
-TOPIC_KEYWORDS = {
-    "sport": [
-        "спорт", "футбол", "хоккей", "теннис", "баскетбол", "волейбол", "гандбол",
-        "олимпи", "чемпион", "атлет", "бокс", "плавани", "борьба", "гимнастик",
-        "велосипед", "лыж", "биатлон", "фигурн", "регби", "бейсбол", "гольф",
-        "карате", "дзюдо", "тхэквондо", "фехтован", "стрельб", "марафон", "спринт",
-        "вратарь", "форвард", "стадион", "турнир", "медаль", "рекорд",
-    ],
-    "hp": [
-        "гарри поттер", "harry potter", "хогвартс", "hogwarts", "волдеморт", "voldemort",
-        "гермиона", "hermione", "рон уизли", "дамблдор", "dumbledore",
-        "хаффлпафф", "hufflepuff", "слизерин", "slytherin", "гриффиндор", "gryffindor",
-        "когтевран", "ravenclaw", "квиддич", "quidditch", "хогсмид", "hogsmeade",
-        "азкабан", "azkaban", "снейп", "snape", "малфой", "malfoy",
-        "хагрид", "hagrid", "луна лавгуд", "добби", "dobby",
-        "волшебная палочка", "зельевар", "мракоборец", "auror",
-        "хорькрукс", "horcrux", "диагон-аллея", "хогвартс-экспресс",
-    ],
-    "black": ["внимание, черный ящик", "внимание, чёрный ящик"],
-    "music": [
-        "музык", "песн", "опер", "симфони", "мелоди", "композитор", "дирижёр",
-        "оркестр", "инструмент", "скрипк", "фортепиан", "пианин", "гитар",
-        "баян", "аккордеон", "флейт", "виолончел", "барабан", "труб",
-        "бетховен", "моцарт", "чайковск", "бах", "шопен", "джаз", "рок",
-        "поп", "классическ", "хор", "солист", "концерт", "альбом", "нота",
-    ],
-    "song": [
-        "песн", "куплет", "припев", "строфа", "стихотворени", "рифм",
-        "лирик", "автор песн", "исполнитель", "группа", "певец", "певица",
-        "хит", "шлягер", "романс", "баллад", "гимн", "ария", "мотив",
-        "мелоди", "ноты", "текст песн", "слова песн", "spotify", "youtube",
-    ],
-    "general": [],
+# user_id -> "awaiting_keyword"
+user_states: dict[int, str] = {}
+
+HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Language": "ru-RU,ru;q=0.9",
+    "Referer": "https://gotquestions.online/",
 }
-
-TOPIC_SEARCH = {
-    "hp":      "гарри поттер",
-    "sport":   "спорт",
-    "black":   "черный ящик",
-    "music":   "музыка",
-    "song":    "песня",
-    "general": None,
-}
-
-
-def search_question_ids(keyword: str, max_ids: int = 30) -> list:
-    """Selenium-ов gotquestions search-иц question ID-нери варцел"""
-    try:
-        from selenium import webdriver
-        from selenium.webdriver.chrome.options import Options
-        from selenium.webdriver.chrome.service import Service
-        from selenium.webdriver.common.by import By
-        from selenium.webdriver.support.ui import WebDriverWait
-        from selenium.webdriver.support import expected_conditions as EC
-        import urllib.parse
-    except ImportError:
-        return []
-
-    opts = Options()
-    opts.add_argument("--headless")
-    opts.add_argument("--no-sandbox")
-    opts.add_argument("--disable-dev-shm-usage")
-    opts.add_argument("--disable-gpu")
-    opts.add_argument("--no-zygote")
-    opts.add_argument("--single-process")
-    opts.add_argument("--disable-extensions")
-    opts.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
-    opts.binary_location = "/usr/bin/chromium"
-
-    driver = None
-    ids = []
-    try:
-        encoded = urllib.parse.quote(keyword)
-        url = f"https://gotquestions.online/search?q={encoded}"
-        service = Service("/usr/bin/chromedriver")
-        driver = webdriver.Chrome(service=service, options=opts)
-        driver.get(url)
-
-        try:
-            WebDriverWait(driver, 8).until(
-                EC.presence_of_element_located((By.XPATH, "//a[contains(@href, '/question/')]"))
-            )
-        except Exception:
-            pass
-
-        import time
-        time.sleep(2)
-
-        links = driver.find_elements(By.XPATH, "//a[contains(@href, '/question/')]")
-        seen = set()
-        for link in links:
-            href = link.get_attribute("href") or ""
-            m = re.search(r'/question/(\d+)', href)
-            if m:
-                qid = int(m.group(1))
-                if qid not in seen:
-                    seen.add(qid)
-                    ids.append(qid)
-                if len(ids) >= max_ids:
-                    break
-
-        print(f"[SEARCH] '{keyword}' — найдено {len(ids)} IDs: {ids[:5]}")
-    except Exception as e:
-        print(f"[SEARCH] Ошибка: {e}")
-    finally:
-        if driver:
-            try:
-                driver.quit()
-            except Exception:
-                pass
-    return ids
-
 
 
 # ─── Gemini AI ────────────────────────────────────────────────────────────────
 
-def gemini_analyze(question: str, answer: str, topic: str = "general") -> dict | None:
-    topic_hint = ""
-    if topic == "sport":
-        topic_hint = "Вопрос должен быть о спорте. Если не о спорте — ok: false."
-    elif topic == "hp":
-        topic_hint = "Вопрос должен быть о вселенной Гарри Поттера. Если нет — ok: false."
-    elif topic == "black":
-        topic_hint = "Вопрос должен начинаться с 'Внимание, чёрный ящик'. Если нет — ok: false."
-
-    prompt = f"""Ты помощник для армянской игры «Что? Где? Когда?». Проанализируй вопрос и ответь ТОЛЬКО в формате JSON.
+def gemini_analyze(question: str, answer: str) -> dict | None:
+    prompt = f"""Ты помощник для игры «Что? Где? Когда?». Проанализируй вопрос и ответь ТОЛЬКО в формате JSON.
 
 Вопрос: {question}
 Ответ: {answer}
 
-{topic_hint}
+Критерии отклонения (если хотя бы один выполнен — ok: false):
+1. Вопрос требует знания специфически русских реалий (русские поговорки, игра слов на русском, русские имена как ключ к ответу) — при переводе на армянский теряет смысл
+2. Вопрос требует конкретных знаний (даты, имена, факты) а не логики и рассуждения
 
-Критерии отклонения (ok: false) — если хотя бы один выполнен:
-1. Вопрос завязан на русском языке: игра слов, рифма, анаграмма, омоним, этимология русского слова, добавление/удаление букв в русском слове (например: добавить "дон" к слову чтобы получить "ладонь"). При переводе на армянский полностью теряет смысл.
-2. Вопрос требует конкретных знаний (даты, имена исторических личностей) а не логики.
-3. Вопрос содержит только мета-информацию (тур, лига, кубок) а не реальный вопрос.
-
-Правила перевода на армянский:
-- "икс" → "իքս" (мужской род, не менять)
-- "альфа" → "ալֆա" (женский род, не менять)
-- "это" / "эта" / "этот" → "դա"
-- Переводи весь текст как единое целое, сохраняя логику и смысл
-- Имена собственные транслитерируй на армянский
+Если оба критерия НЕ выполнены — ok: true.
 
 Верни ТОЛЬКО JSON без markdown:
-{{"ok": true/false, "reason": "краткая причина если false", "translation": "полный перевод вопроса на армянский", "answer_hy": "перевод ответа на армянский"}}"""
+{{"ok": true/false, "reason": "краткая причина если false, иначе пусто", "translation": "перевод вопроса на армянский язык", "answer_hy": "перевод ответа на армянский язык"}}"""
 
     try:
         url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_KEY}"
         resp = requests.post(url, json={
             "contents": [{"parts": [{"text": prompt}]}],
-            "generationConfig": {"temperature": 0.1, "maxOutputTokens": 600}
+            "generationConfig": {"temperature": 0.1, "maxOutputTokens": 500}
         }, timeout=15)
+
         if resp.status_code != 200:
             print(f"[GEMINI] Error {resp.status_code}: {resp.text[:200]}")
             return None
+
         data = resp.json()
         text = data["candidates"][0]["content"]["parts"][0]["text"].strip()
         text = re.sub(r'^```json\s*|^```\s*|\s*```$', '', text, flags=re.MULTILINE).strip()
+
         import json
         result = json.loads(text)
         print(f"[GEMINI] ok={result.get('ok')}, reason={result.get('reason','')[:60]}")
         return result
+
     except Exception as e:
         print(f"[GEMINI] Ошибка: {e}")
         return None
 
+
+# ─── Fallback թարգմանություն ──────────────────────────────────────────────────
 
 def translate_to_armenian(text: str) -> str:
     try:
@@ -199,6 +86,8 @@ def translate_to_armenian(text: str) -> str:
         print(f"[TRANSLATE] Ошибка: {e}")
         return "—"
 
+
+# ─── Բարդության գնահատում ─────────────────────────────────────────────────────
 
 def estimate_difficulty(question: str, answer: str) -> int:
     q_len   = len(question)
@@ -226,6 +115,8 @@ def estimate_difficulty(question: str, answer: str) -> int:
     return max(1, min(10, score))
 
 
+# ─── Regex մաքրում ────────────────────────────────────────────────────────────
+
 _META_MARKERS = re.compile(
     r"(?:"
     r"\d{4}\s+(?:тур|тура|туре)\s*\d*"
@@ -238,10 +129,6 @@ _META_MARKERS = re.compile(
     r"|пакет\s+\d+"
     r")",
     re.IGNORECASE
-)
-
-_SKIP_RE = re.compile(
-    r'(?i)тур\s*\d*|лига|кубок|клуб\s+"|февр|январ|март|апрел|май\s+\d|июн|июл|август|сентябр|октябр|ноябр|декабр'
 )
 
 
@@ -306,6 +193,8 @@ def clean_answer(raw: str) -> str:
     text = re.split(r'(?i)\s*автор\s*[:\.]?', text)[0].strip()
     return text or "—"
 
+
+# ─── Selenium ─────────────────────────────────────────────────────────────────
 
 def fetch_via_selenium(q_id: int) -> dict | None:
     try:
@@ -444,6 +333,10 @@ def fetch_via_selenium(q_id: int) -> dict | None:
             else:
                 content_texts.append(t)
 
+        _SKIP_RE = re.compile(
+            r'(?i)тур\s*\d*|лига|кубок|клуб\s+"|февр|январ|март|апрел|май\s+\d|июн|июл|август|сентябр|октябр|ноябр|декабр'
+        )
+
         for t in content_texts:
             cleaned = clean_question(t)
             if len(cleaned) > 40 and "?" in cleaned and not _META_MARKERS.search(cleaned) and not _SKIP_RE.search(cleaned):
@@ -476,31 +369,100 @@ def fetch_via_selenium(q_id: int) -> dict | None:
     return None
 
 
-def matches_topic(question: str, topic: str) -> bool:
-    if topic == "general":
-        return True
-    q_lower = question.lower()
-    keywords = TOPIC_KEYWORDS.get(topic, [])
-    if topic == "black":
-        q_clean = re.sub(r'[!?,.]', '', q_lower)
-        return any(re.sub(r'[!?,.]', '', kw) in q_clean[:80] for kw in keywords)
-    return any(kw in q_lower for kw in keywords)
+# ─── Բառով որոնում ────────────────────────────────────────────────────────────
+
+def fetch_by_search(keyword: str) -> dict | None:
+    """Поиск вопроса по ключевому слову через gotquestions.online"""
+    print(f"[SEARCH] Ищу по ключу: {keyword}")
+
+    # Пробуем найти ID через поисковую страницу сайта
+    found_ids = []
+
+    try:
+        from bs4 import BeautifulSoup
+
+        search_url = f"https://gotquestions.online/search?q={requests.utils.quote(keyword)}"
+        resp = requests.get(search_url, headers=HEADERS, timeout=15)
+        print(f"[SEARCH] HTTP {resp.status_code} для {search_url}")
+
+        if resp.status_code == 200:
+            soup = BeautifulSoup(resp.text, "html.parser")
+
+            # Ищем ссылки вида /question/12345
+            links = soup.find_all("a", href=re.compile(r"/question/\d+"))
+            for link in links:
+                m = re.search(r"/question/(\d+)", link["href"])
+                if m:
+                    found_ids.append(int(m.group(1)))
+
+            print(f"[SEARCH] Найдено ID через HTML: {found_ids[:10]}")
+
+    except Exception as e:
+        print(f"[SEARCH] HTML поиск ошибка: {e}")
+
+    # Если HTML не дал результатов — пробуем JSON API
+    if not found_ids:
+        try:
+            for api_url in [
+                f"https://gotquestions.online/api/search?query={requests.utils.quote(keyword)}&limit=20",
+                f"https://gotquestions.online/api/questions/search?q={requests.utils.quote(keyword)}",
+                f"https://gotquestions.online/api/v1/search?text={requests.utils.quote(keyword)}",
+            ]:
+                try:
+                    resp = requests.get(api_url, headers=HEADERS, timeout=10)
+                    if resp.status_code == 200:
+                        data = resp.json()
+                        items = (data.get("questions") or data.get("results")
+                                 or data.get("data") or (data if isinstance(data, list) else []))
+                        for item in items:
+                            if isinstance(item, dict):
+                                q_id = item.get("id") or item.get("question_id")
+                                if q_id:
+                                    found_ids.append(int(q_id))
+                        if found_ids:
+                            print(f"[SEARCH] Найдено ID через API {api_url}: {found_ids[:10]}")
+                            break
+                except Exception:
+                    continue
+        except Exception as e:
+            print(f"[SEARCH] API поиск ошибка: {e}")
+
+    if not found_ids:
+        print(f"[SEARCH] ID не найдены для '{keyword}'")
+        return None
+
+    # Дедупликация + перемешивание
+    found_ids = list(dict.fromkeys(found_ids))
+    random.shuffle(found_ids)
+
+    for q_id in found_ids[:10]:
+        q_data = fetch_via_selenium(q_id)
+        if not q_data:
+            continue
+
+        q_lower = q_data["question"].lower()
+        if any(x in q_lower for x in ["раздаточн", "на рисунке", "на фото", "на картинк",
+                                       "перед вами", "посмотрите на", "внимание, рисунок"]):
+            print(f"[SEARCH] ⏭ ID={q_id} — раздаточный материал")
+            continue
+
+        diff = estimate_difficulty(q_data["question"], q_data["answer"])
+        q_data["difficulty"] = diff
+
+        ai = gemini_analyze(q_data["question"], q_data["answer"])
+        q_data["translation"] = (ai.get("translation") if ai else None) or translate_to_armenian(q_data["question"])
+        q_data["answer_hy"]   = (ai.get("answer_hy") if ai else None) or translate_to_armenian(q_data["answer"])
+
+        print(f"[SEARCH] ✅ Найден ID={q_id}")
+        return q_data
+
+    return None
 
 
-def find_question(diff_min: int, diff_max: int, topic: str = "general") -> dict | None:
-    # Тема-ных поисковикиц ID-нер варцел
-    search_kw = TOPIC_SEARCH.get(topic)
-    if search_kw:
-        print(f"[FIND] 🔍 Searching gotquestions for '{search_kw}'...")
-        found_ids = search_question_ids(search_kw, max_ids=30)
-        if found_ids:
-            random.shuffle(found_ids)
-            ids = found_ids[:MAX_ATTEMPTS]
-        else:
-            print(f"[FIND] Search empty, falling back to random")
-            ids = [random.randint(1, 50000) for _ in range(MAX_ATTEMPTS)]
-    else:
-        ids = [random.randint(1, 50000) for _ in range(MAX_ATTEMPTS)]
+# ─── Հարցի ռանդոմ որոնում ────────────────────────────────────────────────────
+
+def find_question(diff_min: int, diff_max: int) -> dict | None:
+    ids   = [random.randint(1, 50000) for _ in range(MAX_ATTEMPTS)]
     last_q = None
 
     for q_id in ids:
@@ -517,23 +479,19 @@ def find_question(diff_min: int, diff_max: int, topic: str = "general") -> dict 
                                        "см. рисунок", "см. фото"]):
             print(f"[FIND] ⏭ ID={q_id} — раздаточный материал")
             continue
+
         if "http" in q_lower or "www." in q_lower:
-            print(f"[FIND] ⏭ ID={q_id} — URL կа")
+            print(f"[FIND] ⏭ ID={q_id} — URL կա")
             continue
 
-        print(f"[FIND] ID={q_id} сложность={diff}, нужно {diff_min}-{diff_max}, тема={topic}")
-
-        # Թеманеri ֆильтр
-        if topic != "general" and not matches_topic(q_data["question"], topic):
-            print(f"[FIND] ⏭ ID={q_id} — не подходит тема {topic}")
-            continue
+        print(f"[FIND] ID={q_id} сложность={diff}, нужно {diff_min}-{diff_max}")
 
         if diff_min <= diff <= diff_max:
-            print(f"[FIND] 🤖 Gemini ստугум...")
-            ai = gemini_analyze(q_data["question"], q_data["answer"], topic)
+            print(f"[FIND] 🤖 Gemini ստուգում...")
+            ai = gemini_analyze(q_data["question"], q_data["answer"])
 
             if ai and not ai.get("ok"):
-                print(f"[FIND] ⏭ Gemini мержец: {ai.get('reason','')}")
+                print(f"[FIND] ⏭ Gemini մերժեց: {ai.get('reason','')}")
                 last_q = q_data
                 last_q["translation"] = ai.get("translation") or translate_to_armenian(q_data["question"])
                 last_q["answer_hy"]   = ai.get("answer_hy") or translate_to_armenian(q_data["answer"])
@@ -541,14 +499,14 @@ def find_question(diff_min: int, diff_max: int, topic: str = "general") -> dict 
 
             q_data["translation"] = (ai.get("translation") if ai else None) or translate_to_armenian(q_data["question"])
             q_data["answer_hy"]   = (ai.get("answer_hy") if ai else None) or translate_to_armenian(q_data["answer"])
-            print(f"[FIND] ✅ Հастатваца")
+            print(f"[FIND] ✅ Հաստատված")
             return q_data
 
         last_q = q_data
         time.sleep(0.2)
 
     if last_q and "translation" not in last_q:
-        ai = gemini_analyze(last_q["question"], last_q["answer"], topic)
+        ai = gemini_analyze(last_q["question"], last_q["answer"])
         last_q["translation"] = (ai.get("translation") if ai else None) or translate_to_armenian(last_q["question"])
         last_q["answer_hy"]   = (ai.get("answer_hy") if ai else None) or translate_to_armenian(last_q["answer"])
     return last_q
@@ -562,182 +520,104 @@ def bar(diff) -> str:
         return "?"
 
 
-def feedback_keyboard(q_id: int) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(inline_keyboard=[[
-        InlineKeyboardButton(text="👎 Bad",    callback_data=f"fb:bad:{q_id}"),
-        InlineKeyboardButton(text="👍 OK", callback_data=f"fb:ok:{q_id}"),
-        InlineKeyboardButton(text="🔥 Good",   callback_data=f"fb:good:{q_id}"),
-    ]])
+def build_card(q_data: dict) -> str:
+    diff  = q_data.get("difficulty", "?")
+    trans = q_data.get("translation", "—")
+
+    card = (
+        f"🔗 <a href='{q_data['url']}'>Հարց #{q_data['id']}</a>\n\n"
+        f"<b>{q_data['question']}</b>\n\n"
+        f"🇦🇲 <b>Հայերեն՝</b>\n<i>{trans}</i>\n\n"
+        f"📊 <b>Բարդություն՝</b> {bar(diff)}"
+    )
+
+    ans_hy = q_data.get("answer_hy") or translate_to_armenian(q_data.get("answer", "—"))
+    if ans_hy and ans_hy != "—":
+        card += f"\n\n✅ <b>Պատասխան՝</b> <tg-spoiler>{ans_hy}</tg-spoiler>"
+
+    if q_data.get("zachot"):
+        zachot_hy = translate_to_armenian(q_data["zachot"])
+        card += f"\n☑️ <b>Հաշվվում է՝</b> <tg-spoiler>{zachot_hy}</tg-spoiler>"
+
+    if q_data.get("comment"):
+        comment_hy = translate_to_armenian(q_data["comment"])
+        card += f"\n\n💬 <b>Մեկնաբանություն՝</b> <tg-spoiler>{comment_hy}</tg-spoiler>"
+
+    return card
 
 
-def topic_keyboard(diff_min: int, diff_max: int) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [
-            InlineKeyboardButton(text="🏆 Sport",         callback_data=f"topic:sport:{diff_min}:{diff_max}"),
-            InlineKeyboardButton(text="⚡ Harry Potter",   callback_data=f"topic:hp:{diff_min}:{diff_max}"),
-        ],
-        [
-            InlineKeyboardButton(text="📦 Black Box",      callback_data=f"topic:black:{diff_min}:{diff_max}"),
-            InlineKeyboardButton(text="🌍 General",       callback_data=f"topic:general:{diff_min}:{diff_max}"),
-        ],
-    ])
-
+# ─── Telegram handlers ────────────────────────────────────────────────────────
 
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message):
     await message.answer(
         "👋 <b>YsuShtok Bot</b> 🎯\n\n"
-        'Questions for "What? Where? When?" game\n'
+        "Հարցեր «Ի՞նչ, որտե՞ղ, ե՞րբ» խաղի համար\n"
         "<a href='https://gotquestions.online'>gotquestions.online</a>\n"
-        "AI filtering + Armenian translation 🇦🇲\n\n"
-        "📌 <b>Commands:</b>\n"
-        "/question — medium difficulty (4–7)\n"
-        "/easy — easy (1–3)\n"
-        "/hard — hard (8–10)\n"
-        "/search WORD — search by keyword\n"
-        "Topics: Sport, Harry Potter, Black Box, Music, Song, General",
+        "AI ֆիլտրացում + թարգմանություն հայերեն 🇦🇲\n\n"
+        "📌 <b>Հրամաններ՝</b>\n"
+        "/question — ռանդոմ կամ բառով (4–7)\n"
+        "/easy — հեշտ (1–3)\n"
+        "/hard — բարդ (8–10)",
         parse_mode="HTML", disable_web_page_preview=True,
     )
 
 
 @dp.message(Command("question"))
 async def handle_question(message: types.Message):
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="🎲 Ռանդոմ", callback_data="mode_random"),
+            InlineKeyboardButton(text="🔎 Բառով", callback_data="mode_search"),
+        ]
+    ])
     await message.answer(
-        "🎯 <b>Choose a topic:</b>",
+        "❓ <b>Ո՞ր ռեժիմով ուզում ես հարց ստանալ?</b>",
         parse_mode="HTML",
-        reply_markup=topic_keyboard(4, 7)
+        reply_markup=kb,
     )
 
 
-@dp.message(Command("easy"))
-async def handle_easy(message: types.Message):
-    await message.answer(
-        "🎯 <b>Choose a topic:</b>",
-        parse_mode="HTML",
-        reply_markup=topic_keyboard(1, 3)
-    )
+@dp.callback_query(lambda c: c.data == "mode_random")
+async def cb_random(callback: types.CallbackQuery):
+    await callback.message.edit_reply_markup(reply_markup=None)
+    await _send(callback.message, 4, 7, "средней сложности")
+    await callback.answer()
 
 
-@dp.message(Command("hard"))
-async def handle_hard(message: types.Message):
-    await message.answer(
-        "🎯 <b>Choose a topic:</b>",
-        parse_mode="HTML",
-        reply_markup=topic_keyboard(8, 10)
-    )
-
-
-@dp.callback_query(F.data.startswith("topic:"))
-async def handle_topic(callback: types.CallbackQuery):
-    parts    = callback.data.split(":")
-    topic    = parts[1]
-    diff_min = int(parts[2])
-    diff_max = int(parts[3])
-
-    topic_labels = {
-        "sport":   "Sport 🏆",
-        "hp":      "Harry Potter ⚡",
-        "black":   "Black Box 📦",
-        "music":   "Music 🎵",
-        "song":    "Song 🎤",
-        "general": "General 🌍",
-    }
-    label = topic_labels.get(topic, topic)
-
+@dp.callback_query(lambda c: c.data == "mode_search")
+async def cb_search(callback: types.CallbackQuery):
+    user_states[callback.from_user.id] = "awaiting_keyword"
     await callback.message.edit_text(
-        f"🔍 <b>{label}</b> — searching...",
-        parse_mode="HTML"
+        "✏️ <b>Գրիր բառ ռուսերեն</b>\n"
+        "Օրինակ՝ <i>кошка</i>, <i>море</i>, <i>Наполеон</i>, <i>звезда</i>",
+        parse_mode="HTML",
     )
     await callback.answer()
 
-    loop   = asyncio.get_event_loop()
-    q_data = await loop.run_in_executor(None, lambda: find_question(diff_min, diff_max, topic))
 
-    if not q_data:
-        await callback.message.edit_text("❌ Could not find a question. Try again.")
+@dp.message(lambda m: user_states.get(m.from_user.id) == "awaiting_keyword")
+async def handle_keyword(message: types.Message):
+    keyword = message.text.strip()
+
+    # Եթե user-ը command ուղարկեց — state-ը մաքրենք, թույլ տամ հաջորդ handler-ը
+    if keyword.startswith("/"):
+        user_states.pop(message.from_user.id, None)
         return
 
-    diff  = q_data.get("difficulty", "?")
-    trans = q_data.get("translation", "—")
+    user_states.pop(message.from_user.id, None)
 
-    card = (
-        f"🔗 <a href='{q_data['url']}'>Question #{q_data['id']}</a>\n"
-        f"\n"
-        f"<b>{q_data['question']}</b>\n\n"
-        f"🇦🇲 <b>Armenian:</b>\n<i>{trans}</i>\n\n"
-        f"📊 <b>Difficulty:</b> {bar(diff)}"
-    )
+    if len(keyword) < 2:
+        await message.answer("❌ Չափ կարճ բառ է։ Փորձիր կրկին /question")
+        return
 
-    ans_hy = q_data.get("answer_hy") or translate_to_armenian(q_data.get("answer", "—"))
-    if ans_hy and ans_hy != "—":
-        card += f"\n\n✅ <b>Answer:</b> <tg-spoiler>{ans_hy}</tg-spoiler>"
-
-    if q_data.get("zachot"):
-        zachot_hy = translate_to_armenian(q_data["zachot"])
-        card += f"\n☑️ <b>Also accepted:</b> <tg-spoiler>{zachot_hy}</tg-spoiler>"
-
-    if q_data.get("comment"):
-        comment_hy = translate_to_armenian(q_data["comment"])
-        card += f"\n\n💬 <b>Comment:</b> <tg-spoiler>{comment_hy}</tg-spoiler>"
-
-    await callback.message.edit_text(
-        card,
+    wait = await message.answer(
+        f"🔍 Փնտրում եմ հարց <b>«{keyword}»</b> բառով…",
         parse_mode="HTML",
-        disable_web_page_preview=True,
-        reply_markup=feedback_keyboard(q_data["id"])
     )
-    print(f"[BOT] ✅ Отправлен ID={q_data['id']} сложность={diff} тема={topic}")
-
-
-@dp.callback_query(F.data.startswith("fb:"))
-async def handle_feedback(callback: types.CallbackQuery):
-    parts  = callback.data.split(":")
-    rating = parts[1]
-    q_id   = parts[2]
-
-    labels = {
-        "bad":  "👎 Bad — noted!",
-        "ok":   "👍 OK — thanks!",
-        "good": "🔥 Good — great!",
-    }
-    print(f"[FEEDBACK] ID={q_id} rating={rating}")
-    await callback.answer(labels.get(rating, "OK"), show_alert=False)
-    try:
-        await callback.message.edit_reply_markup(reply_markup=None)
-    except Exception:
-        pass
-
-
-@dp.message(Command("search"))
-async def handle_search(message: types.Message):
-    word = message.text.strip().split(maxsplit=1)
-    if len(word) < 2 or not word[1].strip():
-        await message.answer("Usage: /search WORD\nExample: /search ладонь")
-        return
-    keyword = word[1].strip().lower()
-    wait = await message.answer(f"🔍 Searching for questions with <b>{keyword}</b>...", parse_mode="HTML")
-
-    def search_by_word():
-        # Нахал сайтի поисковикиц ID-нер
-        found_ids = search_question_ids(keyword, max_ids=20)
-        if not found_ids:
-            print(f"[SEARCH] No IDs found for '{keyword}', trying random")
-            found_ids = [random.randint(1, 50000) for _ in range(15)]
-        random.shuffle(found_ids)
-        for q_id in found_ids[:15]:
-            q_data = fetch_via_selenium(q_id)
-            if not q_data:
-                continue
-            diff = estimate_difficulty(q_data["question"], q_data["answer"])
-            q_data["difficulty"] = diff
-            ai = gemini_analyze(q_data["question"], q_data["answer"])
-            q_data["translation"] = (ai.get("translation") if ai else None) or translate_to_armenian(q_data["question"])
-            q_data["answer_hy"]   = (ai.get("answer_hy") if ai else None) or translate_to_armenian(q_data["answer"])
-            return q_data
-        return None
 
     loop   = asyncio.get_event_loop()
-    q_data = await loop.run_in_executor(None, search_by_word)
+    q_data = await loop.run_in_executor(None, lambda: fetch_by_search(keyword))
 
     try:
         await bot.delete_message(message.chat.id, wait.message_id)
@@ -745,28 +625,46 @@ async def handle_search(message: types.Message):
         pass
 
     if not q_data:
-        await message.answer(f"❌ No questions found with <b>{keyword}</b>. Try another word.", parse_mode="HTML")
+        await message.answer(
+            f"❌ <b>«{keyword}»</b> բառով հարց չգտնվեց։\n"
+            f"Փորձիր այլ բառ կամ /question",
+            parse_mode="HTML",
+        )
         return
 
-    diff  = q_data.get("difficulty", "?")
-    trans = q_data.get("translation", "—")
-    card = (
-        f"🔍 <b>Search:</b> {keyword}\n"
-        f"🔗 <a href='{q_data['url']}'>Question #{q_data['id']}</a>\n\n"
-        f"<b>{q_data['question']}</b>\n\n"
-        f"🇦🇲 <b>Armenian:</b>\n<i>{trans}</i>\n\n"
-        f"📊 <b>Difficulty:</b> {bar(diff)}"
-    )
-    ans_hy = q_data.get("answer_hy") or translate_to_armenian(q_data.get("answer", "—"))
-    if ans_hy and ans_hy != "—":
-        card += f"\n\n✅ <b>Answer:</b> <tg-spoiler>{ans_hy}</tg-spoiler>"
-    if q_data.get("zachot"):
-        card += f"\n☑️ <b>Also accepted:</b> <tg-spoiler>{translate_to_armenian(q_data['zachot'])}</tg-spoiler>"
-    if q_data.get("comment"):
-        card += f"\n\n💬 <b>Comment:</b> <tg-spoiler>{translate_to_armenian(q_data['comment'])}</tg-spoiler>"
+    card = build_card(q_data)
+    await message.answer(card, parse_mode="HTML", disable_web_page_preview=True)
+    print(f"[BOT] ✅ Search ID={q_data['id']} keyword={keyword}")
 
-    await message.answer(card, parse_mode="HTML", disable_web_page_preview=True,
-                         reply_markup=feedback_keyboard(q_data["id"]))
+
+@dp.message(Command("easy"))
+async def handle_easy(message: types.Message):
+    await _send(message, 1, 3, "лёгкий")
+
+
+@dp.message(Command("hard"))
+async def handle_hard(message: types.Message):
+    await _send(message, 8, 10, "сложный")
+
+
+async def _send(message: types.Message, diff_min: int, diff_max: int, label: str):
+    wait = await message.answer(f"🔍 Ищу <b>{label}</b> вопрос…", parse_mode="HTML")
+
+    loop   = asyncio.get_event_loop()
+    q_data = await loop.run_in_executor(None, lambda: find_question(diff_min, diff_max))
+
+    try:
+        await bot.delete_message(message.chat.id, wait.message_id)
+    except Exception:
+        pass
+
+    if not q_data:
+        await message.answer("❌ Не удалось получить вопрос. Попробуй ещё раз.", parse_mode="HTML")
+        return
+
+    card = build_card(q_data)
+    await message.answer(card, parse_mode="HTML", disable_web_page_preview=True)
+    print(f"[BOT] ✅ Отправлен ID={q_data['id']} сложность={q_data.get('difficulty','?')}")
 
 
 async def main():
@@ -776,6 +674,7 @@ async def main():
     await runner.setup()
     site = web.TCPSite(runner, "0.0.0.0", 10000)
     await site.start()
+
     print("🚀 YsuShtok Bot запущен!")
     await dp.start_polling(bot)
 
